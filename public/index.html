@@ -8,8 +8,12 @@
       (function () {
         const redirect = sessionStorage.redirect;
         if (redirect && redirect !== location.href) {
-          sessionStorage.removeItem('redirect');
-          history.replaceState(null, null, redirect.replace(window.location.origin, ''));
+          sessionStorage.removeItem("redirect");
+          history.replaceState(
+            null,
+            null,
+            redirect.replace(window.location.origin, ""),
+          );
         }
       })();
     </script>
