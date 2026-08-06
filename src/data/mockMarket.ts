@@ -12,7 +12,6 @@ export const SYMBOLS: Record<AssetClass, { symbol: string; name: string }[]> = {
     { symbol: "TSLA", name: "Tesla Inc." },
     { symbol: "META", name: "Meta Platforms" },
     { symbol: "JPM", name: "JPMorgan Chase" },
-    { symbol: "V", name: "Visa Inc." },
     { symbol: "JNJ", name: "Johnson & Johnson" },
   ],
   etf: [
