@@ -1,6 +1,6 @@
 // ─── Portfolio & Investment ───────────────────────────────────────────────────
 
-export type AssetClass = 'stock' | 'etf' | 'crypto' | 'futures' | 'forex';
+export type AssetClass = "stock" | "etf" | "crypto" | "futures" | "forex";
 
 export interface Portfolio {
   id: string;
@@ -16,7 +16,7 @@ export interface Investment {
   name: string;
   assetClass: AssetClass;
   quantity: number;
-  avgCost: number;         // average cost basis per unit
+  avgCost: number; // average cost basis per unit
   addedAt: string;
 }
 
@@ -27,8 +27,8 @@ export interface Quote {
   name: string;
   assetClass: AssetClass;
   price: number;
-  change: number;           // absolute change
-  changePercent: number;    // percentage change
+  change: number; // absolute change
+  changePercent: number; // percentage change
   open: number;
   high: number;
   low: number;
@@ -37,10 +37,11 @@ export interface Quote {
   bid: number;
   ask: number;
   timestamp: number;
+  source?: "live" | "mock";
 }
 
 export interface OHLCV {
-  time: number;             // unix ms
+  time: number; // unix ms
   open: number;
   high: number;
   low: number;
@@ -50,8 +51,8 @@ export interface OHLCV {
 
 // ─── Supply & Demand Zones ────────────────────────────────────────────────────
 
-export type ZoneType = 'supply' | 'demand';
-export type ZoneStrength = 'strong' | 'moderate' | 'weak';
+export type ZoneType = "supply" | "demand";
+export type ZoneStrength = "strong" | "moderate" | "weak";
 
 export interface Zone {
   id: string;
@@ -60,13 +61,13 @@ export interface Zone {
   priceHigh: number;
   priceLow: number;
   description: string;
-  tested: number;           // how many times price has touched this zone
+  tested: number; // how many times price has touched this zone
 }
 
 // ─── Valuation & Recommendations ─────────────────────────────────────────────
 
-export type TradeDirection = 'buy' | 'short';
-export type TradeStyle = 'scalp' | 'day' | 'swing' | 'position';
+export type TradeDirection = "buy" | "short";
+export type TradeStyle = "scalp" | "day" | "swing" | "position";
 
 export interface BracketOrder {
   entry: number;
@@ -80,7 +81,7 @@ export interface BracketOrder {
 export interface TradeRecommendation {
   direction: TradeDirection;
   style: TradeStyle;
-  confidence: number;       // 0-100
+  confidence: number; // 0-100
   rationale: string;
   bracket: BracketOrder;
   zone?: Zone;
@@ -88,14 +89,14 @@ export interface TradeRecommendation {
 
 export interface Valuation {
   symbol: string;
-  intrinsicValue: number | null;  // null for non-equity assets
+  intrinsicValue: number | null; // null for non-equity assets
   fairValueMethod: string;
   currentPrice: number;
-  valueGapPercent: number;        // positive = undervalued, negative = overvalued
+  valueGapPercent: number; // positive = undervalued, negative = overvalued
   rsi: number;
   macd: { value: number; signal: number; histogram: number };
-  atr: number;                    // average true range
-  trend: 'uptrend' | 'downtrend' | 'sideways';
+  atr: number; // average true range
+  trend: "uptrend" | "downtrend" | "sideways";
   supplyZones: Zone[];
   demandZones: Zone[];
   recommendations: TradeRecommendation[];
