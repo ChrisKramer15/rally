@@ -7,11 +7,10 @@
  *  - forex          → Finnhub REST rates (requires API key)
  *  - futures        → Finnhub REST quote (CME symbols, requires API key)
  *
- * Falls back to mock data when API key is absent or calls fail.
+ * Returns null when a live quote cannot be retrieved.
  */
 
 import type { Quote, OHLCV, AssetClass } from "../types";
-import { generateQuote, generateOHLCV } from "../data/mockMarket";
 import {
   hasFinnhubKey,
   fetchStockQuote,
@@ -126,8 +125,7 @@ export async function getLiveQuote(
     if (assetClass === "futures") return null;
   }
 
-  // Fallback to mock for all non-futures assets
-  return generateQuote(symbol, name, assetClass);
+  return null;
 }
 
 // ─── Batch quotes for Markets page ───────────────────────────────────────────
@@ -171,13 +169,11 @@ export async function getLiveBatchQuotes(
             source: "live",
           });
         } else {
-          results.push(generateQuote(cs.symbol, cs.name, cs.assetClass));
+          results.push(null);
         }
       }
     } catch {
-      cryptoSymbols.forEach((cs) =>
-        results.push(generateQuote(cs.symbol, cs.name, cs.assetClass)),
-      );
+      cryptoSymbols.forEach(() => results.push(null));
     }
   }
 
@@ -212,7 +208,7 @@ export async function getLiveBatchQuotes(
           source: "live",
         });
       } else {
-        results.push(generateQuote(s.symbol, s.name, s.assetClass));
+        results.push(null);
       }
     }
   }
@@ -272,7 +268,7 @@ export async function getLiveCandles(
     console.warn(`[marketData] getLiveCandles failed for ${symbol}:`, err);
   }
 
-  return generateOHLCV(symbol, days);
+  return [];
 }
 
 // ─── Real-time subscription (WebSocket) ──────────────────────────────────────

@@ -1,53 +1,86 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useParams, useNavigate } from "react-router-dom";
 import {
-  ArrowLeft, TrendingUp, TrendingDown, RefreshCw,
-  Target, AlertTriangle, Activity, Zap, Clock
-} from 'lucide-react';
-import { getAllSymbols } from '../data/mockMarket';
-import { getLiveQuote, getLiveCandles, subscribeToLivePrice } from '../services/marketData';
-import { computeValuation } from '../data/valuation';
-import { usePortfolioStore } from '../store/portfolioStore';
-import type { Quote, Valuation, TradeRecommendation, OHLCV, AssetClass } from '../types';
-import PriceChart from '../components/PriceChart';
-import Badge from '../components/Badge';
-import StatCard from '../components/StatCard';
-import DataSourceBanner from '../components/DataSourceBanner';
+  ArrowLeft,
+  TrendingUp,
+  TrendingDown,
+  RefreshCw,
+  Target,
+  AlertTriangle,
+  Activity,
+  Zap,
+  Clock,
+} from "lucide-react";
+import { getAllSymbols } from "../data/mockMarket";
+import {
+  getLiveQuote,
+  getLiveCandles,
+  subscribeToLivePrice,
+} from "../services/marketData";
+import { computeValuation } from "../data/valuation";
+import { usePortfolioStore } from "../store/portfolioStore";
+import type {
+  Quote,
+  Valuation,
+  TradeRecommendation,
+  OHLCV,
+  AssetClass,
+} from "../types";
+import PriceChart from "../components/PriceChart";
+import Badge from "../components/Badge";
+import StatCard from "../components/StatCard";
+import DataSourceBanner from "../components/DataSourceBanner";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function confidenceColor(c: number): string {
-  if (c >= 70) return 'text-emerald-400';
-  if (c >= 45) return 'text-yellow-400';
-  return 'text-red-400';
+  if (c >= 70) return "text-emerald-400";
+  if (c >= 45) return "text-yellow-400";
+  return "text-red-400";
 }
 
 function tradeStyleIcon(style: string) {
   switch (style) {
-    case 'scalp':    return <Zap size={13} className="text-yellow-400" />;
-    case 'day':      return <Clock size={13} className="text-blue-400" />;
-    case 'swing':    return <Activity size={13} className="text-purple-400" />;
-    case 'position': return <Target size={13} className="text-emerald-400" />;
-    default:         return null;
+    case "scalp":
+      return <Zap size={13} className="text-yellow-400" />;
+    case "day":
+      return <Clock size={13} className="text-blue-400" />;
+    case "swing":
+      return <Activity size={13} className="text-purple-400" />;
+    case "position":
+      return <Target size={13} className="text-emerald-400" />;
+    default:
+      return null;
   }
 }
 
-function tradeStyleBadge(style: string): 'yellow' | 'blue' | 'purple' | 'green' {
+function tradeStyleBadge(
+  style: string,
+): "yellow" | "blue" | "purple" | "green" {
   switch (style) {
-    case 'scalp':  return 'yellow';
-    case 'day':    return 'blue';
-    case 'swing':  return 'purple';
-    default:       return 'green';
+    case "scalp":
+      return "yellow";
+    case "day":
+      return "blue";
+    case "swing":
+      return "purple";
+    default:
+      return "green";
   }
 }
 
 function tradeStyleDesc(style: string): string {
   switch (style) {
-    case 'scalp':    return 'Scalp trade — minutes to hours, very tight stops, high-frequency entries';
-    case 'day':      return 'Day trade — intraday, position closed before market session ends';
-    case 'swing':    return 'Swing trade — hold days to weeks, riding short-term momentum moves';
-    case 'position': return 'Position trade — hold weeks to months, macro trend or fundamental play';
-    default:         return '';
+    case "scalp":
+      return "Scalp trade — minutes to hours, very tight stops, high-frequency entries";
+    case "day":
+      return "Day trade — intraday, position closed before market session ends";
+    case "swing":
+      return "Swing trade — hold days to weeks, riding short-term momentum moves";
+    case "position":
+      return "Position trade — hold weeks to months, macro trend or fundamental play";
+    default:
+      return "";
   }
 }
 
@@ -61,23 +94,36 @@ function ZonePanel({ valuation }: { valuation: Valuation }) {
           <TrendingDown size={14} /> Supply Zones (Resistance)
         </h3>
         {valuation.supplyZones.length === 0 ? (
-          <p className="text-xs text-slate-500">No nearby supply zones detected.</p>
+          <p className="text-xs text-slate-500">
+            No nearby supply zones detected.
+          </p>
         ) : (
           <div className="space-y-3">
             {valuation.supplyZones.map((z) => (
-              <div key={z.id} className="bg-red-900/20 border border-red-800/40 rounded-lg p-3">
+              <div
+                key={z.id}
+                className="bg-red-900/20 border border-red-800/40 rounded-lg p-3"
+              >
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-xs font-mono text-red-300">
                     ${z.priceLow.toFixed(4)} – ${z.priceHigh.toFixed(4)}
                   </span>
                   <Badge
                     label={z.strength}
-                    variant={z.strength === 'strong' ? 'red' : z.strength === 'moderate' ? 'yellow' : 'slate'}
+                    variant={
+                      z.strength === "strong"
+                        ? "red"
+                        : z.strength === "moderate"
+                          ? "yellow"
+                          : "slate"
+                    }
                   />
                 </div>
                 <p className="text-xs text-slate-400">{z.description}</p>
                 {z.tested > 0 && (
-                  <p className="text-xs text-slate-500 mt-1">Tested {z.tested}× — weakens with each touch</p>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Tested {z.tested}× — weakens with each touch
+                  </p>
                 )}
               </div>
             ))}
@@ -90,23 +136,36 @@ function ZonePanel({ valuation }: { valuation: Valuation }) {
           <TrendingUp size={14} /> Demand Zones (Support)
         </h3>
         {valuation.demandZones.length === 0 ? (
-          <p className="text-xs text-slate-500">No nearby demand zones detected.</p>
+          <p className="text-xs text-slate-500">
+            No nearby demand zones detected.
+          </p>
         ) : (
           <div className="space-y-3">
             {valuation.demandZones.map((z) => (
-              <div key={z.id} className="bg-emerald-900/20 border border-emerald-800/40 rounded-lg p-3">
+              <div
+                key={z.id}
+                className="bg-emerald-900/20 border border-emerald-800/40 rounded-lg p-3"
+              >
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-xs font-mono text-emerald-300">
                     ${z.priceLow.toFixed(4)} – ${z.priceHigh.toFixed(4)}
                   </span>
                   <Badge
                     label={z.strength}
-                    variant={z.strength === 'strong' ? 'green' : z.strength === 'moderate' ? 'yellow' : 'slate'}
+                    variant={
+                      z.strength === "strong"
+                        ? "green"
+                        : z.strength === "moderate"
+                          ? "yellow"
+                          : "slate"
+                    }
                   />
                 </div>
                 <p className="text-xs text-slate-400">{z.description}</p>
                 {z.tested > 0 && (
-                  <p className="text-xs text-slate-500 mt-1">Tested {z.tested}× — weakens with each touch</p>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Tested {z.tested}× — weakens with each touch
+                  </p>
                 )}
               </div>
             ))}
@@ -132,10 +191,10 @@ function RecommendationCard({
 }) {
   const { portfolios, addInvestment } = usePortfolioStore();
   const [added, setAdded] = useState(false);
-  const isBuy = rec.direction === 'buy';
-  const borderColor = isBuy ? 'border-emerald-800/60' : 'border-red-800/60';
-  const bgColor = isBuy ? 'bg-emerald-900/15' : 'bg-red-900/15';
-  const labelColor = isBuy ? 'text-emerald-400' : 'text-red-400';
+  const isBuy = rec.direction === "buy";
+  const borderColor = isBuy ? "border-emerald-800/60" : "border-red-800/60";
+  const bgColor = isBuy ? "bg-emerald-900/15" : "bg-red-900/15";
+  const labelColor = isBuy ? "text-emerald-400" : "text-red-400";
   const pf = (v: number) => `$${v.toFixed(v < 10 ? 4 : 2)}`;
 
   const handleAddToPortfolio = () => {
@@ -158,22 +217,32 @@ function RecommendationCard({
     <div className={`border rounded-xl p-5 ${borderColor} ${bgColor}`}>
       <div className="flex items-start justify-between mb-3">
         <div className="flex items-center gap-2">
-          {isBuy ? <TrendingUp className="text-emerald-400" size={18} /> : <TrendingDown className="text-red-400" size={18} />}
-          <span className={`text-base font-bold uppercase ${labelColor}`}>{rec.direction}</span>
+          {isBuy ? (
+            <TrendingUp className="text-emerald-400" size={18} />
+          ) : (
+            <TrendingDown className="text-red-400" size={18} />
+          )}
+          <span className={`text-base font-bold uppercase ${labelColor}`}>
+            {rec.direction}
+          </span>
           <div className="flex items-center gap-1">
             {tradeStyleIcon(rec.style)}
             <Badge label={rec.style} variant={tradeStyleBadge(rec.style)} />
           </div>
         </div>
         <div className="text-right">
-          <div className={`text-lg font-bold ${confidenceColor(rec.confidence)}`}>{rec.confidence}%</div>
+          <div
+            className={`text-lg font-bold ${confidenceColor(rec.confidence)}`}
+          >
+            {rec.confidence}%
+          </div>
           <div className="text-xs text-slate-500">confidence</div>
         </div>
       </div>
 
       <div className="h-1.5 bg-slate-700 rounded-full mb-4 overflow-hidden">
         <div
-          className={`h-full rounded-full transition-all ${rec.confidence >= 70 ? 'bg-emerald-500' : rec.confidence >= 45 ? 'bg-yellow-500' : 'bg-red-500'}`}
+          className={`h-full rounded-full transition-all ${rec.confidence >= 70 ? "bg-emerald-500" : rec.confidence >= 45 ? "bg-yellow-500" : "bg-red-500"}`}
           style={{ width: `${rec.confidence}%` }}
         />
       </div>
@@ -181,24 +250,60 @@ function RecommendationCard({
       <p className="text-sm text-slate-300 mb-4">{rec.rationale}</p>
 
       <div className="bg-slate-700/40 rounded-lg px-3 py-2 mb-4 flex items-start gap-2">
-        <AlertTriangle size={13} className="text-yellow-500 mt-0.5 flex-shrink-0" />
+        <AlertTriangle
+          size={13}
+          className="text-yellow-500 mt-0.5 flex-shrink-0"
+        />
         <p className="text-xs text-slate-400">{tradeStyleDesc(rec.style)}</p>
       </div>
 
       <div>
-        <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Bracket Order</h4>
+        <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">
+          Bracket Order
+        </h4>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
           {[
-            { label: 'Entry',    value: pf(rec.bracket.entry),    cls: 'bg-slate-700/60 text-white' },
-            { label: 'Stop Loss',value: pf(rec.bracket.stopLoss), cls: 'bg-red-900/30 text-red-300' },
-            { label: 'Target 1', value: pf(rec.bracket.target1),  cls: 'bg-emerald-900/30 text-emerald-300' },
-            { label: 'Target 2', value: pf(rec.bracket.target2),  cls: 'bg-emerald-900/20 text-emerald-300' },
-            { label: 'Target 3', value: pf(rec.bracket.target3),  cls: 'bg-emerald-900/10 text-emerald-300' },
-            { label: 'R:R Ratio',value: `1:${rec.bracket.riskRewardRatio}`, cls: 'bg-indigo-900/30 text-indigo-300' },
+            {
+              label: "Entry",
+              value: pf(rec.bracket.entry),
+              cls: "bg-slate-700/60 text-white",
+            },
+            {
+              label: "Stop Loss",
+              value: pf(rec.bracket.stopLoss),
+              cls: "bg-red-900/30 text-red-300",
+            },
+            {
+              label: "Target 1",
+              value: pf(rec.bracket.target1),
+              cls: "bg-emerald-900/30 text-emerald-300",
+            },
+            {
+              label: "Target 2",
+              value: pf(rec.bracket.target2),
+              cls: "bg-emerald-900/20 text-emerald-300",
+            },
+            {
+              label: "Target 3",
+              value: pf(rec.bracket.target3),
+              cls: "bg-emerald-900/10 text-emerald-300",
+            },
+            {
+              label: "R:R Ratio",
+              value: `1:${rec.bracket.riskRewardRatio}`,
+              cls: "bg-indigo-900/30 text-indigo-300",
+            },
           ].map((item) => (
-            <div key={item.label} className={`rounded-lg p-2 text-center ${item.cls.split(' ')[0]}`}>
+            <div
+              key={item.label}
+              className={`rounded-lg p-2 text-center ${item.cls.split(" ")[0]}`}
+            >
               <div className="text-xs text-slate-400 mb-0.5">{item.label}</div>
-              <div className={`font-mono font-semibold text-sm ${item.cls.split(' ')[1]}`}>{item.value}</div>
+              <div
+                className={`font-mono font-semibold text-sm ${item.cls.split(" ")[1]}`}
+              >
+                {item.value}
+              </div>
             </div>
           ))}
         </div>
@@ -207,11 +312,12 @@ function RecommendationCard({
           disabled={added}
           className="mt-3 w-full rounded-lg border border-indigo-600/50 bg-indigo-600/15 px-3 py-2 text-sm font-medium text-indigo-300 transition-colors hover:bg-indigo-600/25 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {added ? 'Added to portfolio' : 'Add trade suggestion to portfolio'}
+          {added ? "Added to portfolio" : "Add trade suggestion to portfolio"}
         </button>
         {rec.zone && (
           <p className="text-xs text-slate-500 mt-2">
-            Based on {rec.zone.type} zone ${rec.zone.priceLow.toFixed(4)}–${rec.zone.priceHigh.toFixed(4)}
+            Based on {rec.zone.type} zone ${rec.zone.priceLow.toFixed(4)}–$
+            {rec.zone.priceHigh.toFixed(4)}
           </p>
         )}
       </div>
@@ -224,15 +330,18 @@ function RecommendationCard({
 export default function ValuationPage() {
   const { symbol } = useParams<{ symbol: string }>();
   const navigate = useNavigate();
-  const decoded = decodeURIComponent(symbol ?? '').replace('--', '/');
+  const decoded = decodeURIComponent(symbol ?? "").replace("--", "/");
 
   // Stabilise meta — useMemo so the object reference doesn't change every render
   const allSymbols = useMemo(() => getAllSymbols(), []);
-  const meta = useMemo(() => allSymbols.find((s) => s.symbol === decoded) ?? null, [allSymbols, decoded]);
+  const meta = useMemo(
+    () => allSymbols.find((s) => s.symbol === decoded) ?? null,
+    [allSymbols, decoded],
+  );
 
   // Pull primitives out so useCallback deps are stable strings, not the meta object
-  const metaSymbol     = meta?.symbol ?? '';
-  const metaName       = meta?.name ?? '';
+  const metaSymbol = meta?.symbol ?? "";
+  const metaName = meta?.name ?? "";
   const metaAssetClass = meta?.assetClass;
 
   const [quote, setQuote] = useState<Quote | null>(null);
@@ -263,7 +372,7 @@ export default function ValuationPage() {
       openPriceRef.current = q.open;
       setQuote(q);
       setCandles(c);
-      setValuation(computeValuation(metaSymbol, q.price));
+      setValuation(computeValuation(metaSymbol, q.price, c));
       setLastUpdated(new Date());
     } finally {
       setLoading(false);
@@ -279,12 +388,12 @@ export default function ValuationPage() {
       if (q === null) return;
       // Preserve existing open so WS dep doesn't change
       setQuote((prev) => ({ ...q, open: prev?.open ?? q.open }));
-      setValuation(computeValuation(metaSymbol, q.price));
+      setValuation(computeValuation(metaSymbol, q.price, candles));
       setLastUpdated(new Date());
     } finally {
       setRefreshingVal(false);
     }
-  }, [metaSymbol, metaName, metaAssetClass]);
+  }, [metaSymbol, metaName, metaAssetClass, candles]);
 
   useEffect(() => {
     loadAll();
@@ -311,19 +420,19 @@ export default function ValuationPage() {
                 low: Math.min(prev.low, price),
                 timestamp: Date.now(),
               }
-            : prev
+            : prev,
         );
         setLastUpdated(new Date());
-      }
+      },
     );
 
     return () => {
       wsUnsub.current?.();
       wsUnsub.current = null;
     };
-  // quote is only here to gate the effect until initial load completes;
-  // we intentionally don't re-run on every quote update
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // quote is only here to gate the effect until initial load completes;
+    // we intentionally don't re-run on every quote update
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [metaSymbol, metaAssetClass, quote !== null]);
 
   // REST polling fallback every 15s — preserve open price to keep WS dep stable
@@ -335,7 +444,7 @@ export default function ValuationPage() {
         const q = await getLiveQuote(metaSymbol, metaName, metaAssetClass);
         if (q === null) return;
         // Preserve the original open so WS subscription isn't recreated
-        setQuote((prev) => prev ? { ...q, open: prev.open } : q);
+        setQuote((prev) => (prev ? { ...q, open: prev.open } : q));
         setLastUpdated(new Date());
       } catch {
         // silently ignore
@@ -348,7 +457,10 @@ export default function ValuationPage() {
     return (
       <div className="text-center py-20 text-slate-400">
         <p>Symbol "{decoded}" not found.</p>
-        <button onClick={() => navigate('/markets')} className="mt-3 text-indigo-400 hover:underline text-sm">
+        <button
+          onClick={() => navigate("/markets")}
+          className="mt-3 text-indigo-400 hover:underline text-sm"
+        >
           ← Back to Markets
         </button>
       </div>
@@ -367,7 +479,10 @@ export default function ValuationPage() {
   if (comingSoon) {
     return (
       <div className="space-y-6">
-        <button onClick={() => navigate(-1)} className="flex items-center gap-1 text-sm text-slate-400 hover:text-white transition-colors">
+        <button
+          onClick={() => navigate(-1)}
+          className="flex items-center gap-1 text-sm text-slate-400 hover:text-white transition-colors"
+        >
           <ArrowLeft size={15} /> Back
         </button>
         <div className="bg-slate-800 border border-slate-700 rounded-xl p-6 flex items-center gap-3">
@@ -385,13 +500,16 @@ export default function ValuationPage() {
           </div>
           <h2 className="text-xl font-semibold text-white mb-2">Coming Soon</h2>
           <p className="text-slate-400 text-sm max-w-md mb-2">
-            Live futures data for <span className="font-semibold text-indigo-300">{meta.symbol}</span> ({meta.name}) is not yet available.
+            Live futures data for{" "}
+            <span className="font-semibold text-indigo-300">{meta.symbol}</span>{" "}
+            ({meta.name}) is not yet available.
           </p>
           <p className="text-slate-500 text-xs max-w-sm">
-            CME futures require a licensed real-time data feed. Support for futures is in development.
+            CME futures require a licensed real-time data feed. Support for
+            futures is in development.
           </p>
           <button
-            onClick={() => navigate('/markets')}
+            onClick={() => navigate("/markets")}
             className="mt-6 flex items-center gap-2 bg-slate-700 hover:bg-slate-600 text-slate-300 px-4 py-2 rounded-lg text-sm transition-colors"
           >
             <ArrowLeft size={14} /> Back to Markets
@@ -403,7 +521,13 @@ export default function ValuationPage() {
 
   const isUp = quote!.change >= 0;
   const pf = (v: number) => v.toFixed(v < 10 ? 4 : 2);
-  const assetBadgeColor = { stock: 'blue', etf: 'purple', crypto: 'yellow', futures: 'indigo', forex: 'green' }[meta.assetClass] as 'blue' | 'purple' | 'yellow' | 'indigo' | 'green';
+  const assetBadgeColor = {
+    stock: "blue",
+    etf: "purple",
+    crypto: "yellow",
+    futures: "indigo",
+    forex: "green",
+  }[meta.assetClass] as "blue" | "purple" | "yellow" | "indigo" | "green";
   // Safe to assert non-null here — comingSoon guard and loading guard above cover null cases
   const q = quote!;
   const val = valuation!;
@@ -411,7 +535,10 @@ export default function ValuationPage() {
   return (
     <div className="space-y-6">
       {/* Back */}
-      <button onClick={() => navigate(-1)} className="flex items-center gap-1 text-sm text-slate-400 hover:text-white transition-colors">
+      <button
+        onClick={() => navigate(-1)}
+        className="flex items-center gap-1 text-sm text-slate-400 hover:text-white transition-colors"
+      >
         <ArrowLeft size={15} /> Back
       </button>
 
@@ -427,14 +554,23 @@ export default function ValuationPage() {
             </div>
             <p className="text-slate-400">{meta.name}</p>
             <p className="text-xs text-slate-500 mt-1 flex items-center gap-1">
-              {meta.assetClass === 'crypto' ? '⚡ Binance live' : 'Finnhub live'} · {lastUpdated.toLocaleTimeString()}
+              {meta.assetClass === "crypto"
+                ? "⚡ Binance live"
+                : "Finnhub live"}{" "}
+              · {lastUpdated.toLocaleTimeString()}
             </p>
           </div>
           <div className="text-right">
-            <div className="text-3xl font-bold text-white font-mono">${pf(q.price)}</div>
-            <div className={`flex items-center justify-end gap-1 text-base font-semibold ${isUp ? 'text-emerald-400' : 'text-red-400'}`}>
+            <div className="text-3xl font-bold text-white font-mono">
+              ${pf(q.price)}
+            </div>
+            <div
+              className={`flex items-center justify-end gap-1 text-base font-semibold ${isUp ? "text-emerald-400" : "text-red-400"}`}
+            >
               {isUp ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
-              {isUp ? '+' : ''}{pf(q.change)} ({isUp ? '+' : ''}{q.changePercent.toFixed(2)}%)
+              {isUp ? "+" : ""}
+              {pf(q.change)} ({isUp ? "+" : ""}
+              {q.changePercent.toFixed(2)}%)
             </div>
             <div className="flex gap-3 text-xs text-slate-500 justify-end mt-1">
               <span>Bid: ${pf(q.bid)}</span>
@@ -445,31 +581,52 @@ export default function ValuationPage() {
 
         <div className="grid grid-cols-4 gap-2 mt-4 pt-4 border-t border-slate-700">
           {[
-            { label: 'Open', value: `$${pf(q.open)}`, color: '' },
-            { label: 'High', value: `$${pf(q.high)}`, color: 'text-emerald-400' },
-            { label: 'Low',  value: `$${pf(q.low)}`,  color: 'text-red-400' },
-            { label: 'Volume', value: q.volume > 0 ? q.volume.toLocaleString() : '—', color: '' },
+            { label: "Open", value: `$${pf(q.open)}`, color: "" },
+            {
+              label: "High",
+              value: `$${pf(q.high)}`,
+              color: "text-emerald-400",
+            },
+            { label: "Low", value: `$${pf(q.low)}`, color: "text-red-400" },
+            {
+              label: "Volume",
+              value: q.volume > 0 ? q.volume.toLocaleString() : "—",
+              color: "",
+            },
           ].map((item) => (
             <div key={item.label} className="text-center">
               <p className="text-xs text-slate-500">{item.label}</p>
-              <p className={`text-sm font-mono font-semibold ${item.color || 'text-white'}`}>{item.value}</p>
+              <p
+                className={`text-sm font-mono font-semibold ${item.color || "text-white"}`}
+              >
+                {item.value}
+              </p>
             </div>
           ))}
         </div>
       </div>
 
       {/* Chart */}
-      <PriceChart candles={candles} supplyZones={val.supplyZones} demandZones={val.demandZones} />
+      <PriceChart
+        candles={candles}
+        supplyZones={val.supplyZones}
+        demandZones={val.demandZones}
+      />
 
       {/* Valuation & Technicals */}
       <div>
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-base font-semibold text-white">Valuation & Technicals</h2>
+          <h2 className="text-base font-semibold text-white">
+            Valuation & Technicals
+          </h2>
           <button
             onClick={refreshValuation}
             className="flex items-center gap-1 text-xs text-slate-400 hover:text-white transition-colors"
           >
-            <RefreshCw size={12} className={refreshingVal ? 'animate-spin' : ''} />
+            <RefreshCw
+              size={12}
+              className={refreshingVal ? "animate-spin" : ""}
+            />
             Refresh analysis
           </button>
         </div>
@@ -483,47 +640,72 @@ export default function ValuationPage() {
           )}
           <StatCard
             label="Value Gap"
-            value={`${val.valueGapPercent >= 0 ? '+' : ''}${val.valueGapPercent}%`}
-            sub={val.valueGapPercent >= 0 ? 'Undervalued' : 'Overvalued'}
-            color={val.intrinsicValue !== null ? (val.valueGapPercent >= 5 ? 'green' : val.valueGapPercent <= -5 ? 'red' : 'default') : 'default'}
+            value={`${val.valueGapPercent >= 0 ? "+" : ""}${val.valueGapPercent}%`}
+            sub={val.valueGapPercent >= 0 ? "Undervalued" : "Overvalued"}
+            color={
+              val.intrinsicValue !== null
+                ? val.valueGapPercent >= 5
+                  ? "green"
+                  : val.valueGapPercent <= -5
+                    ? "red"
+                    : "default"
+                : "default"
+            }
           />
           <StatCard
             label="RSI (14)"
             value={String(val.rsi)}
-            sub={val.rsi > 70 ? 'Overbought' : val.rsi < 30 ? 'Oversold' : 'Neutral'}
-            color={val.rsi > 70 ? 'red' : val.rsi < 30 ? 'green' : 'default'}
+            sub={
+              val.rsi > 70
+                ? "Overbought"
+                : val.rsi < 30
+                  ? "Oversold"
+                  : "Neutral"
+            }
+            color={val.rsi > 70 ? "red" : val.rsi < 30 ? "green" : "default"}
           />
           <StatCard
             label="MACD"
             value={String(val.macd.value)}
             sub={`Signal: ${val.macd.signal}`}
-            color={val.macd.histogram > 0 ? 'green' : 'red'}
+            color={val.macd.histogram > 0 ? "green" : "red"}
           />
           <StatCard label="ATR" value={String(val.atr)} sub="Avg True Range" />
           <StatCard
             label="Trend"
             value={val.trend.charAt(0).toUpperCase() + val.trend.slice(1)}
-            color={val.trend === 'uptrend' ? 'green' : val.trend === 'downtrend' ? 'red' : 'yellow'}
+            color={
+              val.trend === "uptrend"
+                ? "green"
+                : val.trend === "downtrend"
+                  ? "red"
+                  : "yellow"
+            }
           />
         </div>
       </div>
 
       {/* Supply & Demand Zones */}
       <div>
-        <h2 className="text-base font-semibold text-white mb-2">Supply & Demand Zones</h2>
+        <h2 className="text-base font-semibold text-white mb-2">
+          Supply & Demand Zones
+        </h2>
         <p className="text-xs text-slate-500 mb-3">
-          Identified from swing highs/lows in the past 60 sessions using real price data.
-          Strong zones (large-bodied candles) carry more weight. Each test weakens the zone.
+          Identified from swing highs/lows in the past 60 sessions using real
+          price data. Strong zones (large-bodied candles) carry more weight.
+          Each test weakens the zone.
         </p>
         <ZonePanel valuation={val} />
       </div>
 
       {/* Trade Recommendations */}
       <div>
-        <h2 className="text-base font-semibold text-white mb-1">Trade Recommendations</h2>
+        <h2 className="text-base font-semibold text-white mb-1">
+          Trade Recommendations
+        </h2>
         <p className="text-xs text-slate-500 mb-3">
-          Based on supply/demand zones, RSI, MACD, and trend from live market data.
-          Includes a bracket order with stop-loss and 3 profit targets.
+          Based on supply/demand zones, RSI, MACD, and trend from live market
+          data. Includes a bracket order with stop-loss and 3 profit targets.
         </p>
         {val.recommendations.length === 0 ? (
           <div className="bg-slate-800 border border-slate-700 rounded-xl p-6 text-center text-slate-500">
@@ -537,7 +719,7 @@ export default function ValuationPage() {
                 rec={rec}
                 symbol={metaSymbol}
                 name={metaName}
-                assetClass={metaAssetClass ?? 'stock'}
+                assetClass={metaAssetClass ?? "stock"}
               />
             ))}
           </div>
@@ -546,11 +728,15 @@ export default function ValuationPage() {
 
       {/* Disclaimer */}
       <div className="bg-yellow-900/20 border border-yellow-800/50 rounded-xl p-4 flex gap-3">
-        <AlertTriangle size={16} className="text-yellow-500 flex-shrink-0 mt-0.5" />
+        <AlertTriangle
+          size={16}
+          className="text-yellow-500 flex-shrink-0 mt-0.5"
+        />
         <p className="text-xs text-yellow-200/70">
-          Trade recommendations are algorithmic suggestions based on technical analysis of live market data.
-          This is not financial advice. Past performance does not guarantee future results.
-          Always conduct your own research and manage your risk.
+          Trade recommendations are algorithmic suggestions based on technical
+          analysis of live market data. This is not financial advice. Past
+          performance does not guarantee future results. Always conduct your own
+          research and manage your risk.
         </p>
       </div>
     </div>

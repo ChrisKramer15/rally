@@ -1,14 +1,23 @@
-import type { OHLCV, Zone, Valuation, TradeRecommendation, BracketOrder, TradeStyle, TradeDirection } from '../types';
-import { generateOHLCV } from './mockMarket';
+import type {
+  OHLCV,
+  Zone,
+  Valuation,
+  TradeRecommendation,
+  BracketOrder,
+  TradeStyle,
+  TradeDirection,
+} from "../types";
 
 // ─── Technical Indicators ─────────────────────────────────────────────────────
 
 function calcRSI(closes: number[], period = 14): number {
   if (closes.length < period + 1) return 50;
-  let gains = 0, losses = 0;
+  let gains = 0,
+    losses = 0;
   for (let i = 1; i <= period; i++) {
     const diff = closes[i] - closes[i - 1];
-    if (diff >= 0) gains += diff; else losses -= diff;
+    if (diff >= 0) gains += diff;
+    else losses -= diff;
   }
   let avgGain = gains / period;
   let avgLoss = losses / period;
@@ -50,10 +59,18 @@ function calcATR(candles: OHLCV[], period = 14): number {
   for (let i = 1; i < candles.length; i++) {
     const { high, low } = candles[i];
     const prevClose = candles[i - 1].close;
-    trs.push(Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose)));
+    trs.push(
+      Math.max(
+        high - low,
+        Math.abs(high - prevClose),
+        Math.abs(low - prevClose),
+      ),
+    );
   }
   const recent = trs.slice(-period);
-  return parseFloat((recent.reduce((a, b) => a + b, 0) / recent.length).toFixed(4));
+  return parseFloat(
+    (recent.reduce((a, b) => a + b, 0) / recent.length).toFixed(4),
+  );
 }
 
 // ─── Supply & Demand Zone Detection ──────────────────────────────────────────
@@ -81,56 +98,61 @@ function detectZones(candles: OHLCV[]): { supply: Zone[]; demand: Zone[] } {
     const c = recent[i];
 
     const isSwingHigh =
-      c.high > recent[i - 1].high && c.high > recent[i - 2].high &&
-      c.high > recent[i + 1].high && c.high > recent[i + 2].high;
+      c.high > recent[i - 1].high &&
+      c.high > recent[i - 2].high &&
+      c.high > recent[i + 1].high &&
+      c.high > recent[i + 2].high;
 
     const isSwingLow =
-      c.low < recent[i - 1].low && c.low < recent[i - 2].low &&
-      c.low < recent[i + 1].low && c.low < recent[i + 2].low;
+      c.low < recent[i - 1].low &&
+      c.low < recent[i - 2].low &&
+      c.low < recent[i + 1].low &&
+      c.low < recent[i + 2].low;
 
     const bodySize = Math.abs(c.close - c.open);
     const totalRange = c.high - c.low || 0.0001;
     const bodyRatio = bodySize / totalRange;
 
     // Strength: how decisively price left the zone
-    const strength = bodyRatio > 0.65 ? 'strong' : bodyRatio > 0.38 ? 'moderate' : 'weak';
+    const strength =
+      bodyRatio > 0.65 ? "strong" : bodyRatio > 0.38 ? "moderate" : "weak";
 
     // Count how many subsequent candles have closed back inside the zone
     // (each test weakens the zone — 2+ tests = stale, discard for signals)
     if (isSwingHigh) {
-      const zoneLow  = parseFloat(Math.max(c.open, c.close).toFixed(4));
+      const zoneLow = parseFloat(Math.max(c.open, c.close).toFixed(4));
       const zoneHigh = parseFloat((c.high * 1.001).toFixed(4));
 
-      const tested = recent.slice(i + 1).filter(
-        (r) => r.close >= zoneLow && r.close <= zoneHigh
-      ).length;
+      const tested = recent
+        .slice(i + 1)
+        .filter((r) => r.close >= zoneLow && r.close <= zoneHigh).length;
 
       supply.push({
         id: `supply-${i}`,
-        type: 'supply',
+        type: "supply",
         strength,
         priceHigh: zoneHigh,
         priceLow: zoneLow,
-        description: buildZoneDesc('supply', strength, tested),
+        description: buildZoneDesc("supply", strength, tested),
         tested,
       });
     }
 
     if (isSwingLow) {
       const zoneHigh = parseFloat(Math.min(c.open, c.close).toFixed(4));
-      const zoneLow  = parseFloat((c.low * 0.999).toFixed(4));
+      const zoneLow = parseFloat((c.low * 0.999).toFixed(4));
 
-      const tested = recent.slice(i + 1).filter(
-        (r) => r.close >= zoneLow && r.close <= zoneHigh
-      ).length;
+      const tested = recent
+        .slice(i + 1)
+        .filter((r) => r.close >= zoneLow && r.close <= zoneHigh).length;
 
       demand.push({
         id: `demand-${i}`,
-        type: 'demand',
+        type: "demand",
         strength,
         priceHigh: zoneHigh,
         priceLow: zoneLow,
-        description: buildZoneDesc('demand', strength, tested),
+        description: buildZoneDesc("demand", strength, tested),
         tested,
       });
     }
@@ -151,13 +173,23 @@ function detectZones(candles: OHLCV[]): { supply: Zone[]; demand: Zone[] } {
   return { supply: supplyZones, demand: demandZones };
 }
 
-function buildZoneDesc(type: 'supply' | 'demand', strength: string, tested: number): string {
-  const freshness = tested === 0 ? 'Fresh zone — untested.' : tested === 1 ? 'Tested once — still valid.' : `Tested ${tested}× — zone is weakening.`;
-  const impulse = strength === 'strong'
-    ? `Strong ${type === 'supply' ? 'bearish' : 'bullish'} departure candle.`
-    : strength === 'moderate'
-    ? 'Moderate impulse away from zone.'
-    : 'Weak impulse — low conviction zone.';
+function buildZoneDesc(
+  type: "supply" | "demand",
+  strength: string,
+  tested: number,
+): string {
+  const freshness =
+    tested === 0
+      ? "Fresh zone — untested."
+      : tested === 1
+        ? "Tested once — still valid."
+        : `Tested ${tested}× — zone is weakening.`;
+  const impulse =
+    strength === "strong"
+      ? `Strong ${type === "supply" ? "bearish" : "bullish"} departure candle.`
+      : strength === "moderate"
+        ? "Moderate impulse away from zone."
+        : "Weak impulse — low conviction zone.";
   return `${impulse} ${freshness}`;
 }
 
@@ -168,10 +200,10 @@ function buildZoneDesc(type: 'supply' | 'demand', strength: string, tested: numb
 
 function suggestTradeStyle(atr: number, price: number): TradeStyle {
   const atrPct = atr / price;
-  if (atrPct > 0.025) return 'scalp';    // >2.5% daily range — very volatile
-  if (atrPct > 0.012) return 'day';      // 1.2–2.5% daily range
-  if (atrPct > 0.006) return 'swing';    // 0.6–1.2% daily range
-  return 'position';                      // <0.6% daily range — slow mover
+  if (atrPct > 0.025) return "scalp"; // >2.5% daily range — very volatile
+  if (atrPct > 0.012) return "day"; // 1.2–2.5% daily range
+  if (atrPct > 0.006) return "swing"; // 0.6–1.2% daily range
+  return "position"; // <0.6% daily range — slow mover
 }
 
 // ─── Bracket Order Builder ────────────────────────────────────────────────────
@@ -187,29 +219,31 @@ function buildBracket(
   entry: number,
   stopInvalidation: number,
   atr: number,
-  direction: TradeDirection
+  direction: TradeDirection,
 ): BracketOrder {
   const risk = Math.abs(entry - stopInvalidation);
   // Ensure minimum risk = 0.5× ATR so targets are meaningful
   const effectiveRisk = Math.max(risk, atr * 0.5);
-  const rr = parseFloat((effectiveRisk > 0 ? (atr * 3) / effectiveRisk : 2).toFixed(2));
+  const rr = parseFloat(
+    (effectiveRisk > 0 ? (atr * 3) / effectiveRisk : 2).toFixed(2),
+  );
 
-  if (direction === 'buy') {
+  if (direction === "buy") {
     return {
-      entry:          parseFloat(entry.toFixed(4)),
-      stopLoss:       parseFloat(stopInvalidation.toFixed(4)),
-      target1:        parseFloat((entry + atr * 1.5).toFixed(4)),
-      target2:        parseFloat((entry + atr * 3.0).toFixed(4)),
-      target3:        parseFloat((entry + atr * 5.0).toFixed(4)),
+      entry: parseFloat(entry.toFixed(4)),
+      stopLoss: parseFloat(stopInvalidation.toFixed(4)),
+      target1: parseFloat((entry + atr * 1.5).toFixed(4)),
+      target2: parseFloat((entry + atr * 3.0).toFixed(4)),
+      target3: parseFloat((entry + atr * 5.0).toFixed(4)),
       riskRewardRatio: rr,
     };
   } else {
     return {
-      entry:          parseFloat(entry.toFixed(4)),
-      stopLoss:       parseFloat(stopInvalidation.toFixed(4)),
-      target1:        parseFloat((entry - atr * 1.5).toFixed(4)),
-      target2:        parseFloat((entry - atr * 3.0).toFixed(4)),
-      target3:        parseFloat((entry - atr * 5.0).toFixed(4)),
+      entry: parseFloat(entry.toFixed(4)),
+      stopLoss: parseFloat(stopInvalidation.toFixed(4)),
+      target1: parseFloat((entry - atr * 1.5).toFixed(4)),
+      target2: parseFloat((entry - atr * 3.0).toFixed(4)),
+      target3: parseFloat((entry - atr * 5.0).toFixed(4)),
       riskRewardRatio: rr,
     };
   }
@@ -226,41 +260,47 @@ function buildBracket(
 
 function scoreZone(
   zone: Zone,
-  trend: 'uptrend' | 'downtrend' | 'sideways',
+  trend: "uptrend" | "downtrend" | "sideways",
   direction: TradeDirection,
   currentPrice: number,
-  atr: number
+  atr: number,
 ): number {
   // Freshness — zones tested 2+ times are excluded upstream, but score anyway
   const freshnessScore = zone.tested === 0 ? 35 : zone.tested === 1 ? 22 : 8;
 
   // Strength of departure candle
-  const strengthScore = zone.strength === 'strong' ? 25 : zone.strength === 'moderate' ? 15 : 6;
+  const strengthScore =
+    zone.strength === "strong" ? 25 : zone.strength === "moderate" ? 15 : 6;
 
   // Trend alignment
   //  Buy at demand: ideally uptrend or sideways (institutional accumulation)
   //  Short at supply: ideally downtrend or sideways
   let trendScore = 0;
-  if (direction === 'buy') {
-    trendScore = trend === 'uptrend' ? 25 : trend === 'sideways' ? 15 : 5;
+  if (direction === "buy") {
+    trendScore = trend === "uptrend" ? 25 : trend === "sideways" ? 15 : 5;
   } else {
-    trendScore = trend === 'downtrend' ? 25 : trend === 'sideways' ? 15 : 5;
+    trendScore = trend === "downtrend" ? 25 : trend === "sideways" ? 15 : 5;
   }
 
   // Proximity — how close is the current price to the zone edge?
   // Full points if within 0.5× ATR, sliding to 0 at 3× ATR
   let proximityScore = 0;
-  if (direction === 'buy') {
+  if (direction === "buy") {
     const distToZone = currentPrice - zone.priceHigh; // positive = above zone
     const distRatio = distToZone / atr;
-    proximityScore = distRatio <= 0.5 ? 15 : distRatio <= 1 ? 10 : distRatio <= 2 ? 5 : 2;
+    proximityScore =
+      distRatio <= 0.5 ? 15 : distRatio <= 1 ? 10 : distRatio <= 2 ? 5 : 2;
   } else {
     const distToZone = zone.priceLow - currentPrice; // positive = below zone
     const distRatio = distToZone / atr;
-    proximityScore = distRatio <= 0.5 ? 15 : distRatio <= 1 ? 10 : distRatio <= 2 ? 5 : 2;
+    proximityScore =
+      distRatio <= 0.5 ? 15 : distRatio <= 1 ? 10 : distRatio <= 2 ? 5 : 2;
   }
 
-  return Math.min(100, freshnessScore + strengthScore + trendScore + proximityScore);
+  return Math.min(
+    100,
+    freshnessScore + strengthScore + trendScore + proximityScore,
+  );
 }
 
 // ─── Recommendation Builder ───────────────────────────────────────────────────
@@ -278,8 +318,8 @@ function buildRecs(
   supplyZones: Zone[],
   currentPrice: number,
   atr: number,
-  trend: 'uptrend' | 'downtrend' | 'sideways',
-  tradeStyle: TradeStyle
+  trend: "uptrend" | "downtrend" | "sideways",
+  tradeStyle: TradeStyle,
 ): TradeRecommendation[] {
   const recs: TradeRecommendation[] = [];
 
@@ -298,20 +338,21 @@ function buildRecs(
     // Stop: just below the bottom of the zone (invalidation)
     const stopInvalidation = parseFloat((zone.priceLow - atr * 0.2).toFixed(4));
 
-    const confidence = scoreZone(zone, trend, 'buy', currentPrice, atr);
+    const confidence = scoreZone(zone, trend, "buy", currentPrice, atr);
 
-    const distLabel = distToZone <= atr * 0.5
-      ? 'Price is currently entering the zone'
-      : distToZone <= atr
-      ? 'Price is approaching the zone'
-      : 'Price is pulling back toward the zone';
+    const distLabel =
+      distToZone <= atr * 0.5
+        ? "Price is currently entering the zone"
+        : distToZone <= atr
+          ? "Price is approaching the zone"
+          : "Price is pulling back toward the zone";
 
     recs.push({
-      direction: 'buy',
+      direction: "buy",
       style: tradeStyle,
       confidence,
-      rationale: buildRationale('buy', zone, trend, distLabel, currentPrice),
-      bracket: buildBracket(entry, stopInvalidation, atr, 'buy'),
+      rationale: buildRationale("buy", zone, trend, distLabel, currentPrice),
+      bracket: buildBracket(entry, stopInvalidation, atr, "buy"),
       zone,
     });
   }
@@ -329,22 +370,25 @@ function buildRecs(
     const entry = parseFloat((zone.priceLow * 0.999).toFixed(4));
 
     // Stop: just above the top of the zone (invalidation)
-    const stopInvalidation = parseFloat((zone.priceHigh + atr * 0.2).toFixed(4));
+    const stopInvalidation = parseFloat(
+      (zone.priceHigh + atr * 0.2).toFixed(4),
+    );
 
-    const confidence = scoreZone(zone, trend, 'short', currentPrice, atr);
+    const confidence = scoreZone(zone, trend, "short", currentPrice, atr);
 
-    const distLabel = distToZone <= atr * 0.5
-      ? 'Price is currently entering the zone'
-      : distToZone <= atr
-      ? 'Price is approaching the zone'
-      : 'Price is rallying toward the zone';
+    const distLabel =
+      distToZone <= atr * 0.5
+        ? "Price is currently entering the zone"
+        : distToZone <= atr
+          ? "Price is approaching the zone"
+          : "Price is rallying toward the zone";
 
     recs.push({
-      direction: 'short',
+      direction: "short",
       style: tradeStyle,
       confidence,
-      rationale: buildRationale('short', zone, trend, distLabel, currentPrice),
-      bracket: buildBracket(entry, stopInvalidation, atr, 'short'),
+      rationale: buildRationale("short", zone, trend, distLabel, currentPrice),
+      bracket: buildBracket(entry, stopInvalidation, atr, "short"),
       zone,
     });
   }
@@ -357,32 +401,53 @@ function buildRationale(
   zone: Zone,
   trend: string,
   distLabel: string,
-  _price: number
+  _price: number,
 ): string {
   const zoneRange = `$${zone.priceLow.toFixed(4)}–$${zone.priceHigh.toFixed(4)}`;
-  const freshness = zone.tested === 0 ? 'fresh, untested' : 'once-tested';
-  const trendNote = trend === 'uptrend'
-    ? 'Macro trend is bullish.'
-    : trend === 'downtrend'
-    ? 'Macro trend is bearish.'
-    : 'Trend is sideways — range play.';
+  const freshness = zone.tested === 0 ? "fresh, untested" : "once-tested";
+  const trendNote =
+    trend === "uptrend"
+      ? "Macro trend is bullish."
+      : trend === "downtrend"
+        ? "Macro trend is bearish."
+        : "Trend is sideways — range play.";
 
-  if (direction === 'buy') {
-    return `${distLabel} at ${freshness} demand zone ${zoneRange}. ${zone.strength === 'strong' ? 'Strong bullish departure candle confirms institutional interest.' : 'Moderate demand present at this level.'} ${trendNote} Stop below zone invalidation; targets at ATR multiples.`;
+  if (direction === "buy") {
+    return `${distLabel} at ${freshness} demand zone ${zoneRange}. ${zone.strength === "strong" ? "Strong bullish departure candle confirms institutional interest." : "Moderate demand present at this level."} ${trendNote} Stop below zone invalidation; targets at ATR multiples.`;
   } else {
-    return `${distLabel} at ${freshness} supply zone ${zoneRange}. ${zone.strength === 'strong' ? 'Strong bearish departure candle confirms institutional selling.' : 'Moderate supply present at this level.'} ${trendNote} Stop above zone invalidation; targets at ATR multiples.`;
+    return `${distLabel} at ${freshness} supply zone ${zoneRange}. ${zone.strength === "strong" ? "Strong bearish departure candle confirms institutional selling." : "Moderate supply present at this level."} ${trendNote} Stop above zone invalidation; targets at ATR multiples.`;
   }
 }
 
 // ─── Master Valuation Engine ──────────────────────────────────────────────────
 
-export function computeValuation(symbol: string, currentPrice: number): Valuation {
-  const candles = generateOHLCV(symbol, 90);
+export function computeValuation(
+  symbol: string,
+  currentPrice: number,
+  candles: OHLCV[] = [],
+): Valuation {
+  if (candles.length === 0) {
+    return {
+      symbol,
+      intrinsicValue: null,
+      fairValueMethod: "N/A",
+      currentPrice,
+      valueGapPercent: 0,
+      rsi: 50,
+      macd: { value: 0, signal: 0, histogram: 0 },
+      atr: 0,
+      trend: "sideways",
+      supplyZones: [],
+      demandZones: [],
+      recommendations: [],
+    };
+  }
+
   const closes = candles.map((c) => c.close);
 
-  const rsi  = calcRSI(closes);
+  const rsi = calcRSI(closes);
   const macd = calcMACD(closes);
-  const atr  = calcATR(candles);
+  const atr = calcATR(candles);
 
   const { supply, demand } = detectZones(candles);
 
@@ -391,31 +456,43 @@ export function computeValuation(symbol: string, currentPrice: number): Valuatio
   const ema50 = ema(closes, 50);
   const lastEma20 = ema20[ema20.length - 1];
   const lastEma50 = ema50[ema50.length - 1];
-  const trend = lastEma20 > lastEma50 * 1.005
-    ? 'uptrend'
-    : lastEma20 < lastEma50 * 0.995
-    ? 'downtrend'
-    : 'sideways';
+  const trend =
+    lastEma20 > lastEma50 * 1.005
+      ? "uptrend"
+      : lastEma20 < lastEma50 * 0.995
+        ? "downtrend"
+        : "sideways";
 
   // Trade style based on volatility only
   const tradeStyle = suggestTradeStyle(atr, currentPrice);
 
   // Intrinsic value — P/E proxy for equities only; null for crypto/forex/futures
-  const isEquityLike = !symbol.includes('/') && !['ES', 'NQ', 'CL', 'GC', 'ZB', 'SI'].includes(symbol);
+  const isEquityLike =
+    !symbol.includes("/") &&
+    !["ES", "NQ", "CL", "GC", "ZB", "SI"].includes(symbol);
   const intrinsicValue = isEquityLike
     ? parseFloat((currentPrice * (0.85 + Math.random() * 0.4)).toFixed(2))
     : null;
   const valueGapPercent = intrinsicValue
-    ? parseFloat((((intrinsicValue - currentPrice) / currentPrice) * 100).toFixed(1))
+    ? parseFloat(
+        (((intrinsicValue - currentPrice) / currentPrice) * 100).toFixed(1),
+      )
     : 0;
 
   // Build S&D-only recommendations
-  const recommendations = buildRecs(demand, supply, currentPrice, atr, trend, tradeStyle);
+  const recommendations = buildRecs(
+    demand,
+    supply,
+    currentPrice,
+    atr,
+    trend,
+    tradeStyle,
+  );
 
   return {
     symbol,
     intrinsicValue,
-    fairValueMethod: isEquityLike ? 'P/E Relative Valuation' : 'N/A',
+    fairValueMethod: isEquityLike ? "P/E Relative Valuation" : "N/A",
     currentPrice,
     valueGapPercent,
     rsi,

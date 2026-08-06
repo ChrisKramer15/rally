@@ -95,6 +95,7 @@ export default function PortfolioPage() {
     return sum + (q ? q.price * inv.quantity : 0);
   }, 0);
   const hasLivePrices = liveValueEntries.length > 0;
+  const showLiveDataNotice = !hasLivePrices && portfolio.investments.length > 0;
   const totalPnL = hasLivePrices ? totalValue - totalCost : 0;
   const totalPnLPct =
     hasLivePrices && totalCost > 0 ? (totalPnL / totalCost) * 100 : 0;
@@ -162,6 +163,13 @@ export default function PortfolioPage() {
         </button>
       </div>
 
+      {showLiveDataNotice && (
+        <div className="mb-4 rounded-lg border border-yellow-700/40 bg-yellow-900/20 px-3 py-2 text-sm text-yellow-300">
+          Live prices are currently unavailable for this portfolio, so market
+          value and P&L are shown as Not Available.
+        </div>
+      )}
+
       {/* Summary cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
         {[
@@ -173,13 +181,13 @@ export default function PortfolioPage() {
             label: "Market Value",
             value: hasLivePrices
               ? `$${totalValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
-              : "Live data pending",
+              : "Not Available",
           },
           {
             label: "Total P&L",
             value: hasLivePrices
               ? `${totalPnL >= 0 ? "+" : ""}$${totalPnL.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
-              : "—",
+              : "Not Available",
             color:
               hasLivePrices && totalPnL >= 0
                 ? "text-emerald-400"
@@ -191,7 +199,7 @@ export default function PortfolioPage() {
             label: "Return",
             value: hasLivePrices
               ? `${totalPnLPct >= 0 ? "+" : ""}${totalPnLPct.toFixed(2)}%`
-              : "—",
+              : "Not Available",
             color:
               hasLivePrices && totalPnLPct >= 0
                 ? "text-emerald-400"
@@ -378,7 +386,14 @@ export default function PortfolioPage() {
                         </div>
                         {inv.bracketOrder && (
                           <div className="mt-1 text-[11px] text-slate-500">
-                            Bracket • SL ${inv.bracketOrder.stopLoss.toFixed(inv.bracketOrder.stopLoss < 10 ? 4 : 2)} • T1 ${inv.bracketOrder.target1.toFixed(inv.bracketOrder.target1 < 10 ? 4 : 2)}
+                            Bracket • SL $
+                            {inv.bracketOrder.stopLoss.toFixed(
+                              inv.bracketOrder.stopLoss < 10 ? 4 : 2,
+                            )}{" "}
+                            • T1 $
+                            {inv.bracketOrder.target1.toFixed(
+                              inv.bracketOrder.target1 < 10 ? 4 : 2,
+                            )}
                           </div>
                         )}
                       </td>
@@ -386,20 +401,14 @@ export default function PortfolioPage() {
                         {price !== null ? (
                           <div className="flex flex-col items-end">
                             <span>${price.toFixed(price < 10 ? 4 : 2)}</span>
-                            <span
-                              className={`text-[11px] ${q?.source === "mock" ? "text-amber-400" : "text-slate-500"}`}
-                            >
-                              {q?.source === "mock"
-                                ? "Estimated"
-                                : q
-                                  ? "Live"
-                                  : "Pending"}
+                            <span className="text-[11px] text-slate-500">
+                              Live
                             </span>
                           </div>
                         ) : (
                           <div className="flex flex-col items-end text-slate-500">
-                            <span>—</span>
-                            <span className="text-[11px]">Pending</span>
+                            <span>Not Available</span>
+                            <span className="text-[11px]">Live</span>
                           </div>
                         )}
                       </td>
@@ -426,7 +435,7 @@ export default function PortfolioPage() {
                       <td className="px-4 py-3 text-right text-white font-mono">
                         {marketValue !== null
                           ? `$${marketValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
-                          : "—"}
+                          : "Not Available"}
                       </td>
                       <td
                         className={`px-4 py-3 text-right font-mono ${isUp === null ? "text-slate-400" : isUp ? "text-emerald-400" : "text-red-400"}`}
@@ -446,7 +455,7 @@ export default function PortfolioPage() {
                             </div>
                           </>
                         ) : (
-                          <span className="text-slate-500">—</span>
+                          <span className="text-slate-500">Not Available</span>
                         )}
                       </td>
                       <td className="px-4 py-3 text-right">

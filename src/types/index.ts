@@ -17,7 +17,9 @@ export interface Investment {
   assetClass: AssetClass;
   quantity: number;
   avgCost: number; // average cost basis per unit
-  addedAt: string;  bracketOrder?: BracketOrder;}
+  addedAt: string;
+  bracketOrder?: BracketOrder;
+}
 
 // ─── Market Data ─────────────────────────────────────────────────────────────
 
