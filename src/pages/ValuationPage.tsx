@@ -7,7 +7,8 @@ import {
 import { getAllSymbols } from '../data/mockMarket';
 import { getLiveQuote, getLiveCandles, subscribeToLivePrice } from '../services/marketData';
 import { computeValuation } from '../data/valuation';
-import type { Quote, Valuation, TradeRecommendation, OHLCV } from '../types';
+import { usePortfolioStore } from '../store/portfolioStore';
+import type { Quote, Valuation, TradeRecommendation, OHLCV, AssetClass } from '../types';
 import PriceChart from '../components/PriceChart';
 import Badge from '../components/Badge';
 import StatCard from '../components/StatCard';
@@ -118,12 +119,40 @@ function ZonePanel({ valuation }: { valuation: Valuation }) {
 
 // ─── Recommendation Card ──────────────────────────────────────────────────────
 
-function RecommendationCard({ rec }: { rec: TradeRecommendation }) {
+function RecommendationCard({
+  rec,
+  symbol,
+  name,
+  assetClass,
+}: {
+  rec: TradeRecommendation;
+  symbol: string;
+  name: string;
+  assetClass: AssetClass;
+}) {
+  const { portfolios, addInvestment } = usePortfolioStore();
+  const [added, setAdded] = useState(false);
   const isBuy = rec.direction === 'buy';
   const borderColor = isBuy ? 'border-emerald-800/60' : 'border-red-800/60';
   const bgColor = isBuy ? 'bg-emerald-900/15' : 'bg-red-900/15';
   const labelColor = isBuy ? 'text-emerald-400' : 'text-red-400';
   const pf = (v: number) => `$${v.toFixed(v < 10 ? 4 : 2)}`;
+
+  const handleAddToPortfolio = () => {
+    if (added) return;
+    const targetPortfolio = portfolios[0];
+    if (!targetPortfolio) return;
+
+    addInvestment(targetPortfolio.id, {
+      symbol,
+      name,
+      assetClass,
+      quantity: 1,
+      avgCost: rec.bracket.entry,
+      bracketOrder: rec.bracket,
+    });
+    setAdded(true);
+  };
 
   return (
     <div className={`border rounded-xl p-5 ${borderColor} ${bgColor}`}>
@@ -173,6 +202,13 @@ function RecommendationCard({ rec }: { rec: TradeRecommendation }) {
             </div>
           ))}
         </div>
+        <button
+          onClick={handleAddToPortfolio}
+          disabled={added}
+          className="mt-3 w-full rounded-lg border border-indigo-600/50 bg-indigo-600/15 px-3 py-2 text-sm font-medium text-indigo-300 transition-colors hover:bg-indigo-600/25 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {added ? 'Added to portfolio' : 'Add trade suggestion to portfolio'}
+        </button>
         {rec.zone && (
           <p className="text-xs text-slate-500 mt-2">
             Based on {rec.zone.type} zone ${rec.zone.priceLow.toFixed(4)}–${rec.zone.priceHigh.toFixed(4)}
@@ -496,7 +532,13 @@ export default function ValuationPage() {
         ) : (
           <div className="grid md:grid-cols-2 gap-4">
             {val.recommendations.map((rec, i) => (
-              <RecommendationCard key={i} rec={rec} />
+              <RecommendationCard
+                key={i}
+                rec={rec}
+                symbol={metaSymbol}
+                name={metaName}
+                assetClass={metaAssetClass ?? 'stock'}
+              />
             ))}
           </div>
         )}

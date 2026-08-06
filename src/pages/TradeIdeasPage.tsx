@@ -7,6 +7,7 @@ import {
 import { getAllSymbols } from '../data/mockMarket';
 import { getLiveQuote } from '../services/marketData';
 import { computeValuation } from '../data/valuation';
+import { usePortfolioStore } from '../store/portfolioStore';
 import type { TradeRecommendation, AssetClass } from '../types';
 import Badge from '../components/Badge';
 
@@ -109,10 +110,28 @@ function IdeaCard({
   onDismiss: (id: string) => void;
 }) {
   const navigate = useNavigate();
+  const { portfolios, addInvestment } = usePortfolioStore();
+  const [added, setAdded] = useState(false);
   const isBuy = idea.rec.direction === 'buy';
   const borderColor = isBuy ? 'border-emerald-800/50' : 'border-red-800/50';
   const bgColor = isBuy ? 'bg-emerald-900/10' : 'bg-red-900/10';
   const labelColor = isBuy ? 'text-emerald-400' : 'text-red-400';
+
+  const handleAddToPortfolio = () => {
+    if (added) return;
+    const targetPortfolio = portfolios[0];
+    if (!targetPortfolio) return;
+
+    addInvestment(targetPortfolio.id, {
+      symbol: idea.symbol,
+      name: idea.name,
+      assetClass: idea.assetClass,
+      quantity: 1,
+      avgCost: idea.rec.bracket.entry,
+      bracketOrder: idea.rec.bracket,
+    });
+    setAdded(true);
+  };
 
   return (
     <div className={`relative border rounded-xl p-4 flex flex-col gap-3 ${borderColor} ${bgColor} bg-slate-800`}>
@@ -191,12 +210,21 @@ function IdeaCard({
       {/* Footer */}
       <div className="flex items-center justify-between pt-1 border-t border-slate-700/50">
         <span className="text-xs text-slate-500">R:R 1:{idea.rec.bracket.riskRewardRatio}</span>
-        <button
-          onClick={() => navigate(`/valuation/${encodeURIComponent(idea.symbol).replace('%2F', '--')}`)}
-          className="flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
-        >
-          Full analysis <ChevronRight size={11} />
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleAddToPortfolio}
+            disabled={added}
+            className="rounded-lg border border-indigo-600/50 bg-indigo-600/15 px-2.5 py-1.5 text-[11px] font-medium text-indigo-300 transition-colors hover:bg-indigo-600/25 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {added ? 'Added' : 'Add to portfolio'}
+          </button>
+          <button
+            onClick={() => navigate(`/valuation/${encodeURIComponent(idea.symbol).replace('%2F', '--')}`)}
+            className="flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+          >
+            Full analysis <ChevronRight size={11} />
+          </button>
+        </div>
       </div>
     </div>
   );

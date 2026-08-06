@@ -376,6 +376,11 @@ export default function PortfolioPage() {
                             {inv.name}
                           </span>
                         </div>
+                        {inv.bracketOrder && (
+                          <div className="mt-1 text-[11px] text-slate-500">
+                            Bracket • SL ${inv.bracketOrder.stopLoss.toFixed(inv.bracketOrder.stopLoss < 10 ? 4 : 2)} • T1 ${inv.bracketOrder.target1.toFixed(inv.bracketOrder.target1 < 10 ? 4 : 2)}
+                          </div>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-right text-white font-mono">
                         {price !== null ? (
