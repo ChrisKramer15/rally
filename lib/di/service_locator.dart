@@ -6,12 +6,15 @@ import '../data/repositories/market_data_repository.dart';
 import '../data/repositories/portfolio_repository.dart';
 import '../data/services/market_data_service.dart';
 import '../data/services/theme_manager.dart';
+import '../data/services/watchlist_store.dart';
 import '../domain/services/i_market_data_service.dart';
 import '../domain/services/i_portfolio_tracker.dart';
 import '../domain/services/i_valuations_engine.dart';
+import '../domain/services/i_watchlist_store.dart';
 import '../domain/services/portfolio_tracker.dart';
 import '../domain/services/valuations_engine.dart';
 import '../presentation/blocs/chart_bloc.dart';
+import '../presentation/blocs/market_data/market_data_dashboard_bloc.dart';
 import '../presentation/blocs/market_data_bloc.dart';
 import '../presentation/blocs/portfolio_bloc.dart';
 import '../presentation/blocs/theme_cubit.dart';
@@ -59,6 +62,11 @@ Future<void> configureDependencies() async {
     () => PortfolioRepository(sharedPreferences: sl<SharedPreferences>()),
   );
 
+  // --- Data Layer: Stores ---
+  sl.registerLazySingleton<IWatchlistStore>(
+    () => WatchlistStore(prefs: sl<SharedPreferences>()),
+  );
+
   // --- Domain Layer: Services ---
   sl.registerLazySingleton<IPortfolioTracker>(
     () => PortfolioTracker(),
@@ -93,5 +101,12 @@ Future<void> configureDependencies() async {
 
   sl.registerFactory<ChartBloc>(
     () => ChartBloc(repository: sl<MarketDataRepository>()),
+  );
+
+  sl.registerFactory<MarketDataDashboardBloc>(
+    () => MarketDataDashboardBloc(
+      watchlistStore: sl<IWatchlistStore>(),
+      repository: sl<MarketDataRepository>(),
+    ),
   );
 }

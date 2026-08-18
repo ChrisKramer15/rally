@@ -40,6 +40,7 @@ class MarketDataService implements IMarketDataService {
 
   static const int _initialReconnectDelayMs = 1000;
   static const int _maxReconnectDelayMs = 30000;
+  static const int maxReconnectAttempts = 10;
 
   MarketDataService({
     required String baseUrl,
@@ -254,25 +255,53 @@ class MarketDataService implements IMarketDataService {
   }
 
   /// Schedules a reconnection attempt with exponential backoff.
+  ///
+  /// After [maxReconnectAttempts] failed attempts, emits a final
+  /// [ConnectionStatus.disconnected] and stops retrying.
   void _scheduleReconnect() {
     if (_isDisposed || _isReconnecting) return;
+
+    // If we've exhausted all attempts, emit final disconnected and stop.
+    if (_reconnectAttempts >= maxReconnectAttempts) {
+      _connectionStatusController.add(ConnectionStatus.disconnected);
+      return;
+    }
 
     _isReconnecting = true;
     _connectionStatusController.add(ConnectionStatus.reconnecting);
 
-    final delayMs = _calculateReconnectDelay();
-    _reconnectTimer = Timer(Duration(milliseconds: delayMs), () {
+    final delay = calculateReconnectDelay(_reconnectAttempts);
+    _reconnectTimer = Timer(delay, () {
       _reconnectAttempts++;
       _isReconnecting = false;
       _connect();
     });
   }
 
-  /// Calculates the reconnect delay using exponential backoff.
-  /// Initial delay: 1s, max delay: 30s, multiply by 2 each attempt.
-  int _calculateReconnectDelay() {
-    final delay = _initialReconnectDelayMs * (1 << _reconnectAttempts);
-    return delay.clamp(0, _maxReconnectDelayMs);
+  /// Calculates the reconnect delay for a given [attempt] number using
+  /// exponential backoff.
+  ///
+  /// Formula: min(1000 × 2^attempt, 30000) milliseconds.
+  /// Valid for attempt values 0 ≤ N < 10.
+  static Duration calculateReconnectDelay(int attempt) {
+    final delayMs = _initialReconnectDelayMs * (1 << attempt);
+    return Duration(
+      milliseconds: delayMs.clamp(0, _maxReconnectDelayMs),
+    );
+  }
+
+  /// Resets the reconnection state and triggers a fresh reconnection attempt.
+  ///
+  /// Called when the user manually requests a retry after all automatic
+  /// reconnection attempts have been exhausted.
+  void resetReconnection() {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _reconnectAttempts = 0;
+    _isReconnecting = false;
+    if (_subscribedSymbols.isNotEmpty) {
+      _scheduleReconnect();
+    }
   }
 
   void _sendSubscribeMessage(Set<String> symbols) {

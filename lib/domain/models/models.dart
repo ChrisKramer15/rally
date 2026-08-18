@@ -14,3 +14,4 @@ export 'price_zone.dart';
 export 'recommendation.dart';
 export 'result.dart';
 export 'reward_risk_ratio.dart';
+export 'watchlist_change_result.dart';

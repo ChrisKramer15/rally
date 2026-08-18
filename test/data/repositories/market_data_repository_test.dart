@@ -291,17 +291,114 @@ void main() {
       });
     });
 
-    group('polling', () {
-      test('startPolling and stopPolling manage timer lifecycle', () async {
+    group('fetchAndCachePrice', () {
+      test('returns fresh data and caches it', () async {
+        final price = createPrice('AAPL');
         when(() => mockService.getPrice('AAPL'))
-            .thenAnswer((_) async => createPrice('AAPL'));
+            .thenAnswer((_) async => price);
+
+        final result = await repository.fetchAndCachePrice('AAPL');
+
+        expect(result, price);
+        expect(repository.getCachedPrice('AAPL'), price);
+        verify(() => mockService.getPrice('AAPL')).called(1);
+      });
+
+      test('returns cached fallback when service throws', () async {
+        // Populate cache first via a successful fetch.
+        final cachedPrice = createPrice('AAPL');
+        when(() => mockService.getPrice('AAPL'))
+            .thenAnswer((_) async => cachedPrice);
+        await repository.fetchAndCachePrice('AAPL');
+
+        // Now service throws on next call.
+        when(() => mockService.getPrice('AAPL'))
+            .thenThrow(Exception('Service unavailable'));
+
+        final result = await repository.fetchAndCachePrice('AAPL');
+        expect(result, cachedPrice);
+      });
+
+      test('propagates error when no cache exists and service throws',
+          () async {
+        when(() => mockService.getPrice('AAPL'))
+            .thenThrow(Exception('Network error'));
+
+        expect(
+          () => repository.fetchAndCachePrice('AAPL'),
+          throwsA(isA<Exception>()),
+        );
+      });
+
+      test('returns cached fallback on timeout', () async {
+        // Populate cache first.
+        final cachedPrice = createPrice('AAPL');
+        when(() => mockService.getPrice('AAPL'))
+            .thenAnswer((_) async => cachedPrice);
+        await repository.fetchAndCachePrice('AAPL');
+
+        // Simulate timeout: the service future never completes within the
+        // portfolioTimeout. We emulate this by having getPrice return a
+        // future that takes longer than the timeout threshold.
+        // Since we can't easily control time in flutter_test without
+        // fake_async, we simulate the TimeoutException that .timeout()
+        // would produce by throwing it directly.
+        when(() => mockService.getPrice('AAPL')).thenAnswer(
+          (_) => Future<AssetPrice>.error(
+            TimeoutException('Timed out', MarketDataRepository.portfolioTimeout),
+          ),
+        );
+
+        final result = await repository.fetchAndCachePrice('AAPL');
+        expect(result, cachedPrice);
+      });
+
+      test('propagates TimeoutException when no cache exists', () async {
+        // Service produces a TimeoutException and no cache exists.
+        when(() => mockService.getPrice('AAPL')).thenAnswer(
+          (_) => Future<AssetPrice>.error(
+            TimeoutException('Timed out', MarketDataRepository.portfolioTimeout),
+          ),
+        );
+
+        expect(
+          () => repository.fetchAndCachePrice('AAPL'),
+          throwsA(isA<TimeoutException>()),
+        );
+      });
+    });
+
+    group('polling', () {
+      test('startPolling begins periodic price refresh for given symbols',
+          () async {
+        final price = createPrice('AAPL');
+        when(() => mockService.getPrice('AAPL'))
+            .thenAnswer((_) async => price);
 
         repository.startPolling({'AAPL'});
-        // Timer is created but hasn't fired yet (60s interval).
+
+        // Timer hasn't fired yet (60s interval), but the timer exists.
+        // We verify the timer is active by checking that stopping it doesn't
+        // throw and that the repository accepted the symbols.
+        // Note: We cannot easily advance time without fake_async, so we
+        // verify the setup/teardown lifecycle instead.
+        verifyNever(() => mockService.getPrice('AAPL'));
+
+        repository.dispose();
+      });
+
+      test('stopPolling cancels the timer', () async {
+        final price = createPrice('AAPL');
+        when(() => mockService.getPrice('AAPL'))
+            .thenAnswer((_) async => price);
+
+        repository.startPolling({'AAPL'});
         repository.stopPolling();
 
-        // Wait briefly to confirm timer was cancelled.
-        await Future.delayed(const Duration(milliseconds: 50));
+        // Wait well past when a timer tick would occur for a short interval.
+        await Future.delayed(const Duration(milliseconds: 100));
+
+        // Service should never have been called since polling was stopped.
         verifyNever(() => mockService.getPrice('AAPL'));
       });
 
@@ -312,10 +409,157 @@ void main() {
             .thenAnswer((_) async => createPrice('GOOG'));
 
         repository.startPolling({'AAPL'});
+        // Starting polling with a new set replaces the old one.
         repository.startPolling({'GOOG'});
-
-        // Only GOOG should be polled, not AAPL.
         repository.stopPolling();
+
+        // Neither should have been called since we stopped before first tick.
+        verifyNever(() => mockService.getPrice('AAPL'));
+        verifyNever(() => mockService.getPrice('GOOG'));
+      });
+
+      test('dispose stops active polling', () async {
+        when(() => mockService.getPrice('AAPL'))
+            .thenAnswer((_) async => createPrice('AAPL'));
+
+        repository.startPolling({'AAPL'});
+        repository.dispose();
+
+        // Wait to confirm timer was cancelled.
+        await Future.delayed(const Duration(milliseconds: 100));
+        verifyNever(() => mockService.getPrice('AAPL'));
+      });
+    });
+
+    group('updateCacheFromPriceUpdate', () {
+      test('stores correct AssetPrice in cache', () {
+        final update = PriceUpdate(
+          symbol: 'TSLA',
+          price: 245.50,
+          dailyHigh: 250.0,
+          dailyLow: 240.0,
+          volume: 5000000,
+          percentageChange: 3.2,
+          timestamp: DateTime.utc(2024, 6, 15, 10, 30),
+        );
+
+        repository.updateCacheFromPriceUpdate(update);
+
+        final cached = repository.getCachedPrice('TSLA');
+        expect(cached, isNotNull);
+        expect(cached!.symbol, 'TSLA');
+        expect(cached.price, 245.50);
+        expect(cached.dailyHigh, 250.0);
+        expect(cached.dailyLow, 240.0);
+        expect(cached.volume, 5000000);
+        expect(cached.percentageChange, 3.2);
+        expect(cached.timestamp, DateTime.utc(2024, 6, 15, 10, 30));
+      });
+
+      test('overwrites previous cache entry for same symbol', () {
+        final firstUpdate = PriceUpdate(
+          symbol: 'AAPL',
+          price: 150.0,
+          dailyHigh: 155.0,
+          dailyLow: 145.0,
+          volume: 1000000,
+          percentageChange: 1.0,
+          timestamp: DateTime.utc(2024, 6, 15, 10, 0),
+        );
+        final secondUpdate = PriceUpdate(
+          symbol: 'AAPL',
+          price: 152.0,
+          dailyHigh: 156.0,
+          dailyLow: 146.0,
+          volume: 1100000,
+          percentageChange: 2.0,
+          timestamp: DateTime.utc(2024, 6, 15, 10, 5),
+        );
+
+        repository.updateCacheFromPriceUpdate(firstUpdate);
+        repository.updateCacheFromPriceUpdate(secondUpdate);
+
+        final cached = repository.getCachedPrice('AAPL');
+        expect(cached!.price, 152.0);
+        expect(cached.percentageChange, 2.0);
+      });
+    });
+
+    group('getCachedPrice', () {
+      test('returns null for unknown symbol', () {
+        expect(repository.getCachedPrice('UNKNOWN'), isNull);
+      });
+
+      test('returns AssetPrice for cached symbol', () async {
+        final price = createPrice('AAPL');
+        when(() => mockService.getPrice('AAPL'))
+            .thenAnswer((_) async => price);
+        await repository.getPrice('AAPL');
+
+        expect(repository.getCachedPrice('AAPL'), price);
+      });
+    });
+
+    group('getAllCachedPrices', () {
+      test('returns empty unmodifiable map initially', () {
+        final result = repository.getAllCachedPrices();
+        expect(result, isEmpty);
+        expect(
+          () => result['AAPL'] = createPrice('AAPL'),
+          throwsA(isA<UnsupportedError>()),
+        );
+      });
+
+      test('returns unmodifiable map with cached entries', () async {
+        final price = createPrice('AAPL');
+        when(() => mockService.getPrice('AAPL'))
+            .thenAnswer((_) async => price);
+        await repository.getPrice('AAPL');
+
+        final result = repository.getAllCachedPrices();
+        expect(result.length, 1);
+        expect(result['AAPL'], price);
+        expect(
+          () => result['GOOG'] = createPrice('GOOG'),
+          throwsA(isA<UnsupportedError>()),
+        );
+      });
+    });
+
+    group('isStale - extended', () {
+      test('returns false for freshly cached entry', () {
+        final update = PriceUpdate(
+          symbol: 'AAPL',
+          price: 150.0,
+          dailyHigh: 155.0,
+          dailyLow: 145.0,
+          volume: 1000000,
+          percentageChange: 2.5,
+          timestamp: DateTime.now(),
+        );
+        repository.updateCacheFromPriceUpdate(update);
+
+        expect(repository.isStale('AAPL'), isFalse);
+      });
+
+      test('returns true for expired cache entry', () {
+        final update = PriceUpdate(
+          symbol: 'AAPL',
+          price: 150.0,
+          dailyHigh: 155.0,
+          dailyLow: 145.0,
+          volume: 1000000,
+          percentageChange: 2.5,
+          timestamp: DateTime.now(),
+        );
+        repository.updateCacheFromPriceUpdate(update);
+        repository.expireCacheEntry('AAPL');
+
+        expect(repository.isStale('AAPL'), isTrue);
+      });
+
+      test('returns true for symbol not in cache', () {
+        expect(repository.isStale('NONEXISTENT'), isTrue);
       });
     });
 

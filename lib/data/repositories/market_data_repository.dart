@@ -59,6 +59,37 @@ class MarketDataRepository {
   Map<String, AssetPrice> getCachedPrices() =>
       Map.unmodifiable(_cache.map((key, entry) => MapEntry(key, entry.price)));
 
+  /// Returns the cached [AssetPrice] for [symbol], or `null` if not cached.
+  ///
+  /// This is a convenience accessor for downstream modules (e.g., valuation)
+  /// that need a single symbol's cached price.
+  AssetPrice? getCachedPrice(String symbol) => _cache[symbol]?.price;
+
+  /// Returns all currently cached [AssetPrice] entries as an unmodifiable map
+  /// keyed by symbol.
+  Map<String, AssetPrice> getAllCachedPrices() =>
+      Map.unmodifiable(_cache.map((key, entry) => MapEntry(key, entry.price)));
+
+  /// Updates the cache with a [PriceUpdate] event.
+  ///
+  /// Converts the [PriceUpdate] fields into an [AssetPrice] and stores it in
+  /// the cache, timestamped as fetched now.
+  void updateCacheFromPriceUpdate(PriceUpdate update) {
+    final assetPrice = AssetPrice(
+      symbol: update.symbol,
+      price: update.price,
+      dailyHigh: update.dailyHigh,
+      dailyLow: update.dailyLow,
+      volume: update.volume,
+      percentageChange: update.percentageChange,
+      timestamp: update.timestamp,
+    );
+    _cache[update.symbol] = CacheEntry(
+      price: assetPrice,
+      fetchedAt: DateTime.now(),
+    );
+  }
+
   /// Returns `true` if the cached price for [symbol] is older than 60 seconds,
   /// or if no cached price exists.
   bool isStale(String symbol) {
@@ -105,6 +136,28 @@ class MarketDataRepository {
       if (entry != null) return entry.price;
       rethrow;
     } catch (_) {
+      if (entry != null) return entry.price;
+      rethrow;
+    }
+  }
+
+  /// Fetches the current price for [symbol] specifically for valuation use.
+  ///
+  /// Always performs a network fetch with a 60-second timeout, caches the
+  /// result on success. On failure: returns cached price if available,
+  /// otherwise propagates the error to the caller.
+  Future<AssetPrice> fetchAndCachePrice(String symbol) async {
+    try {
+      final price =
+          await _service.getPrice(symbol).timeout(portfolioTimeout);
+      _cache[symbol] = CacheEntry(price: price, fetchedAt: DateTime.now());
+      return price;
+    } on TimeoutException {
+      final entry = _cache[symbol];
+      if (entry != null) return entry.price;
+      rethrow;
+    } catch (_) {
+      final entry = _cache[symbol];
       if (entry != null) return entry.price;
       rethrow;
     }
@@ -179,6 +232,15 @@ class MarketDataRepository {
         // Keep existing cached price on failure.
       }
     }
+  }
+
+  /// Resets the reconnection state in the underlying service and triggers a
+  /// fresh reconnection attempt.
+  ///
+  /// Called when the user manually requests a retry after all automatic
+  /// reconnection attempts have been exhausted.
+  void resetReconnection() {
+    _service.resetReconnection();
   }
 
   /// Disposes resources. Stops polling.

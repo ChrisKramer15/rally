@@ -15,6 +15,7 @@ import 'presentation/blocs/portfolio_bloc.dart';
 import 'presentation/blocs/theme_cubit.dart';
 import 'presentation/blocs/valuations_bloc.dart';
 import 'presentation/screens/chart_screen.dart';
+import 'presentation/screens/market_data_dashboard_screen.dart';
 import 'presentation/screens/market_data_screen.dart';
 import 'presentation/screens/portfolio_screen.dart';
 import 'presentation/screens/recommendations_screen.dart';
@@ -97,6 +98,24 @@ class RallyApp extends StatelessWidget {
                 ? flutter.ThemeMode.dark
                 : flutter.ThemeMode.light,
             home: const RallyHomePage(),
+            onGenerateRoute: (settings) {
+              switch (settings.name) {
+                case '/market-data-dashboard':
+                  return MaterialPageRoute(
+                    builder: (_) => const MarketDataDashboardScreen(),
+                    settings: settings,
+                  );
+                case '/asset-detail':
+                  // Navigate to the market data screen for asset detail.
+                  // The symbol is passed as arguments for future use.
+                  return MaterialPageRoute(
+                    builder: (_) => const MarketDataScreen(),
+                    settings: settings,
+                  );
+                default:
+                  return null;
+              }
+            },
           );
         },
       ),
@@ -117,6 +136,7 @@ class _RallyHomePageState extends State<RallyHomePage> {
 
   static const List<Widget> _screens = [
     PortfolioScreen(),
+    MarketDataDashboardScreen(),
     MarketDataScreen(),
     RecommendationsScreen(),
     ChartScreen(),
@@ -137,6 +157,10 @@ class _RallyHomePageState extends State<RallyHomePage> {
           BottomNavigationBarItem(
             icon: Icon(Icons.account_balance_wallet),
             label: 'Portfolio',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.show_chart),
+            label: 'Watchlist',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.trending_up),

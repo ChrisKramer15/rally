@@ -41,4 +41,10 @@ abstract class IMarketDataService {
   /// Stream indicating the current connection status (connected,
   /// disconnected, reconnecting).
   Stream<ConnectionStatus> get connectionStatus;
+
+  /// Resets the reconnection state and triggers a fresh reconnection attempt.
+  ///
+  /// Called when the user manually requests a retry after all automatic
+  /// reconnection attempts have been exhausted.
+  void resetReconnection();
 }
