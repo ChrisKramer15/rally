@@ -8,6 +8,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'package:rally/data/services/market_data_service.dart';
 import 'package:rally/domain/models/enums.dart';
+import 'package:rally/domain/models/market_data_exception.dart';
 
 // --- Mocks ---
 
@@ -91,7 +92,7 @@ void main() {
   group('MarketDataService - REST', () {
     group('getPrice', () {
       test('returns AssetPrice on successful response', () async {
-        final timestamp = DateTime(2024, 1, 15, 10, 30);
+        final timestamp = DateTime.utc(2024, 1, 15, 10, 30);
         when(() => mockHttpClient.get(any())).thenAnswer(
           (_) async => http.Response(
             jsonEncode({
@@ -373,7 +374,7 @@ void main() {
 
     group('priceStream', () {
       test('emits PriceUpdate when WebSocket receives valid JSON', () async {
-        final timestamp = DateTime(2024, 1, 15, 10, 30);
+        final timestamp = DateTime.utc(2024, 1, 15, 10, 30);
         service.subscribe({'AAPL'});
         await Future.delayed(Duration.zero);
 

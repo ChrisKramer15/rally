@@ -68,16 +68,18 @@ void main() {
       });
 
       test('fetches from service when cached price is stale', () async {
-        final staleTimestamp =
-            DateTime.now().subtract(const Duration(seconds: 61));
-        final stalePrice = createPrice('AAPL', timestamp: staleTimestamp);
+        final price = createPrice('AAPL');
         final freshPrice = createPrice('AAPL');
 
         when(() => mockService.getPrice('AAPL'))
-            .thenAnswer((_) async => stalePrice);
+            .thenAnswer((_) async => price);
 
-        // First call populates cache with stale price.
+        // First call populates cache.
         await repository.getPrice('AAPL');
+
+        // Manually expire the cache entry by replacing it with an old
+        // fetchedAt time to simulate staleness.
+        repository.expireCacheEntry('AAPL');
 
         // Now set up to return fresh price.
         when(() => mockService.getPrice('AAPL'))
@@ -91,19 +93,21 @@ void main() {
 
       test('returns cached price on service exception when cache exists',
           () async {
-        // Populate cache with a stale price.
-        final stalePrice = createPrice('AAPL',
-            timestamp: DateTime.now().subtract(const Duration(seconds: 61)));
+        // Populate cache.
+        final cachedPrice = createPrice('AAPL');
         when(() => mockService.getPrice('AAPL'))
-            .thenAnswer((_) async => stalePrice);
+            .thenAnswer((_) async => cachedPrice);
         await repository.getPrice('AAPL');
+
+        // Expire the cache so it triggers a fetch attempt.
+        repository.expireCacheEntry('AAPL');
 
         // Now service throws.
         when(() => mockService.getPrice('AAPL'))
             .thenThrow(Exception('Network error'));
 
         final result = await repository.getPrice('AAPL');
-        expect(result, stalePrice);
+        expect(result, cachedPrice);
       });
 
       test('rethrows exception when no cached price exists', () async {
@@ -275,11 +279,13 @@ void main() {
       });
 
       test('returns true when cached price is older than 60 seconds', () async {
-        final oldPrice = createPrice('AAPL',
-            timestamp: DateTime.now().subtract(const Duration(seconds: 61)));
+        final price = createPrice('AAPL');
         when(() => mockService.getPrice('AAPL'))
-            .thenAnswer((_) async => oldPrice);
+            .thenAnswer((_) async => price);
         await repository.getPrice('AAPL');
+
+        // Manually expire the cache entry to simulate staleness.
+        repository.expireCacheEntry('AAPL');
 
         expect(repository.isStale('AAPL'), isTrue);
       });

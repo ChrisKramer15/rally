@@ -7,6 +7,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../../domain/models/asset_price.dart';
 import '../../domain/models/asset_search_result.dart';
 import '../../domain/models/enums.dart';
+import '../../domain/models/market_data_exception.dart';
 import '../../domain/models/ohlc_candle.dart';
 import '../../domain/models/price_update.dart';
 import '../../domain/services/i_market_data_service.dart';
@@ -76,8 +77,12 @@ class MarketDataService implements IMarketDataService {
 
     try {
       final json = jsonDecode(response.body) as Map<String, dynamic>;
-      return _parseAssetPrice(json);
+      return AssetPrice.fromJson(json);
+    } on MarketDataException {
+      rethrow;
     } on FormatException catch (e) {
+      throw MarketDataException('Failed to parse price response: $e');
+    } catch (e) {
       throw MarketDataException('Failed to parse price response: $e');
     }
   }
@@ -98,9 +103,14 @@ class MarketDataService implements IMarketDataService {
     try {
       final json = jsonDecode(response.body) as List<dynamic>;
       return json
-          .map((item) => _parseAssetSearchResult(item as Map<String, dynamic>))
+          .map((item) =>
+              AssetSearchResult.fromJson(item as Map<String, dynamic>))
           .toList();
+    } on MarketDataException {
+      rethrow;
     } on FormatException catch (e) {
+      throw MarketDataException('Failed to parse search response: $e');
+    } catch (e) {
       throw MarketDataException('Failed to parse search response: $e');
     }
   }
@@ -211,12 +221,14 @@ class MarketDataService implements IMarketDataService {
   void _onMessage(dynamic message) {
     try {
       final json = jsonDecode(message as String) as Map<String, dynamic>;
-      final priceUpdate = _parsePriceUpdate(json);
+      final priceUpdate = PriceUpdate.fromJson(json);
       _priceStreamController.add(priceUpdate);
     } on FormatException {
-      // Silently ignore malformed messages
+      // Silently discard malformed JSON messages
+    } on MarketDataException {
+      // Silently discard messages with missing/invalid fields
     } catch (_) {
-      // Silently ignore other parsing errors
+      // Silently discard any other unparseable messages
     }
   }
 
@@ -281,28 +293,6 @@ class MarketDataService implements IMarketDataService {
 
   // --- JSON Parsing Helpers ---
 
-  AssetPrice _parseAssetPrice(Map<String, dynamic> json) {
-    return AssetPrice(
-      symbol: json['symbol'] as String,
-      price: (json['price'] as num).toDouble(),
-      dailyHigh: (json['dailyHigh'] as num).toDouble(),
-      dailyLow: (json['dailyLow'] as num).toDouble(),
-      volume: (json['volume'] as num).toDouble(),
-      percentageChange: (json['percentageChange'] as num).toDouble(),
-      timestamp: DateTime.parse(json['timestamp'] as String),
-    );
-  }
-
-  AssetSearchResult _parseAssetSearchResult(Map<String, dynamic> json) {
-    return AssetSearchResult(
-      symbol: json['symbol'] as String,
-      name: json['name'] as String,
-      currentPrice: (json['currentPrice'] as num).toDouble(),
-      percentageChange: (json['percentageChange'] as num).toDouble(),
-      type: AssetType.values.byName(json['type'] as String),
-    );
-  }
-
   OhlcCandle _parseOhlcCandle(Map<String, dynamic> json) {
     return OhlcCandle(
       timestamp: DateTime.parse(json['timestamp'] as String),
@@ -314,18 +304,6 @@ class MarketDataService implements IMarketDataService {
     );
   }
 
-  PriceUpdate _parsePriceUpdate(Map<String, dynamic> json) {
-    return PriceUpdate(
-      symbol: json['symbol'] as String,
-      price: (json['price'] as num).toDouble(),
-      dailyHigh: (json['dailyHigh'] as num).toDouble(),
-      dailyLow: (json['dailyLow'] as num).toDouble(),
-      volume: (json['volume'] as num).toDouble(),
-      percentageChange: (json['percentageChange'] as num).toDouble(),
-      timestamp: DateTime.parse(json['timestamp'] as String),
-    );
-  }
-
   /// Disposes all resources. After calling this, the service should not be used.
   void dispose() {
     _isDisposed = true;
@@ -334,14 +312,4 @@ class MarketDataService implements IMarketDataService {
     _priceStreamController.close();
     _connectionStatusController.close();
   }
-}
-
-/// Exception thrown by [MarketDataService] for API and parsing errors.
-class MarketDataException implements Exception {
-  final String message;
-
-  const MarketDataException(this.message);
-
-  @override
-  String toString() => 'MarketDataException: $message';
 }

@@ -6,6 +6,7 @@ export 'asset_search_result.dart';
 export 'chart_data.dart';
 export 'enums.dart';
 export 'holding.dart';
+export 'market_data_exception.dart';
 export 'ohlc_candle.dart';
 export 'portfolio_summary.dart';
 export 'price_update.dart';

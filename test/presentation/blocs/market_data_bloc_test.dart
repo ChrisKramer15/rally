@@ -7,6 +7,7 @@ import 'package:rally/data/repositories/market_data_repository.dart';
 import 'package:rally/domain/models/asset_price.dart';
 import 'package:rally/domain/models/asset_search_result.dart';
 import 'package:rally/domain/models/enums.dart';
+import 'package:rally/domain/models/price_update.dart';
 import 'package:rally/presentation/blocs/market_data_bloc.dart';
 
 // ---------------------------------------------------------------------------
@@ -18,17 +19,22 @@ class MockMarketDataRepository extends Mock implements MarketDataRepository {}
 void main() {
   late MockMarketDataRepository mockRepository;
   late StreamController<ConnectionStatus> connectionController;
+  late StreamController<PriceUpdate> priceController;
 
   setUp(() {
     mockRepository = MockMarketDataRepository();
     connectionController = StreamController<ConnectionStatus>.broadcast();
+    priceController = StreamController<PriceUpdate>.broadcast();
 
     when(() => mockRepository.connectionStatus)
         .thenAnswer((_) => connectionController.stream);
+    when(() => mockRepository.priceStream)
+        .thenAnswer((_) => priceController.stream);
   });
 
   tearDown(() {
     connectionController.close();
+    priceController.close();
   });
 
   MarketDataBloc buildBloc() =>
@@ -173,13 +179,15 @@ void main() {
 
     group('SubscribeSymbols', () {
       blocTest<MarketDataBloc, MarketDataState>(
-        'calls repository startPolling with symbols',
+        'calls repository subscribe and startPolling with symbols',
         build: buildBloc,
         setUp: () {
+          when(() => mockRepository.subscribe(any())).thenReturn(null);
           when(() => mockRepository.startPolling(any())).thenReturn(null);
         },
         act: (bloc) => bloc.add(const SubscribeSymbols({'AAPL', 'GOOG'})),
         verify: (_) {
+          verify(() => mockRepository.subscribe({'AAPL', 'GOOG'})).called(1);
           verify(() => mockRepository.startPolling({'AAPL', 'GOOG'})).called(1);
         },
       );
@@ -188,6 +196,7 @@ void main() {
         'does not emit new state on subscribe',
         build: buildBloc,
         setUp: () {
+          when(() => mockRepository.subscribe(any())).thenReturn(null);
           when(() => mockRepository.startPolling(any())).thenReturn(null);
         },
         act: (bloc) => bloc.add(const SubscribeSymbols({'AAPL'})),
@@ -238,6 +247,82 @@ void main() {
         },
         wait: const Duration(milliseconds: 50),
         expect: () => [isA<ConnectionWarning>()],
+      );
+    });
+
+    // -----------------------------------------------------------------------
+    // Price stream subscription
+    // -----------------------------------------------------------------------
+
+    group('price stream', () {
+      final assetPrice = AssetPrice(
+        symbol: 'AAPL',
+        price: 150.0,
+        dailyHigh: 155.0,
+        dailyLow: 148.0,
+        volume: 1000000,
+        percentageChange: 1.5,
+        timestamp: DateTime(2024, 1, 1),
+      );
+
+      final priceUpdate = PriceUpdate(
+        symbol: 'AAPL',
+        price: 152.0,
+        dailyHigh: 156.0,
+        dailyLow: 149.0,
+        volume: 1100000,
+        percentageChange: 2.0,
+        timestamp: DateTime(2024, 1, 1, 0, 1),
+      );
+
+      blocTest<MarketDataBloc, MarketDataState>(
+        'updates AssetDetail when priceStream emits for current symbol',
+        build: buildBloc,
+        seed: () => AssetDetail(assetPrice),
+        act: (bloc) {
+          priceController.add(priceUpdate);
+        },
+        wait: const Duration(milliseconds: 50),
+        expect: () => [
+          AssetDetail(AssetPrice(
+            symbol: 'AAPL',
+            price: 152.0,
+            dailyHigh: 156.0,
+            dailyLow: 149.0,
+            volume: 1100000,
+            percentageChange: 2.0,
+            timestamp: DateTime(2024, 1, 1, 0, 1),
+          )),
+        ],
+      );
+
+      blocTest<MarketDataBloc, MarketDataState>(
+        'ignores priceStream update for a different symbol',
+        build: buildBloc,
+        seed: () => AssetDetail(assetPrice),
+        act: (bloc) {
+          priceController.add(PriceUpdate(
+            symbol: 'GOOG',
+            price: 2800.0,
+            dailyHigh: 2850.0,
+            dailyLow: 2750.0,
+            volume: 500000,
+            percentageChange: 0.5,
+            timestamp: DateTime(2024, 1, 1),
+          ));
+        },
+        wait: const Duration(milliseconds: 50),
+        expect: () => <MarketDataState>[],
+      );
+
+      blocTest<MarketDataBloc, MarketDataState>(
+        'ignores priceStream update when not in AssetDetail state',
+        build: buildBloc,
+        act: (bloc) {
+          priceController.add(priceUpdate);
+        },
+        wait: const Duration(milliseconds: 50),
+        expect: () => <MarketDataState>[],
       );
     });
   });

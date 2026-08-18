@@ -5,6 +5,8 @@ import '../../domain/models/asset_price.dart';
 import '../../domain/models/asset_search_result.dart';
 import '../blocs/market_data_bloc.dart';
 import '../theme/neon_theme.dart';
+import '../widgets/market_data/percentage_display_helper.dart';
+import '../widgets/market_data/volume_formatter.dart';
 
 /// Market data screen providing asset search and detail views.
 ///
@@ -193,12 +195,8 @@ class _MarketDataScreenState extends State<MarketDataScreen> {
 
   /// Displays the asset detail view with price, high/low, volume, and change.
   Widget _buildAssetDetail(AssetPrice asset) {
-    final brightness = Theme.of(context).brightness;
+    final display = getPercentageDisplay(asset.percentageChange);
     final isPositive = asset.percentageChange >= 0;
-    final changeColor = isPositive
-        ? NeonColors.buyGreen(brightness)
-        : NeonColors.shortRed(brightness);
-    final changeIcon = isPositive ? Icons.arrow_upward : Icons.arrow_downward;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16.0),
@@ -238,12 +236,12 @@ class _MarketDataScreenState extends State<MarketDataScreen> {
           // Percentage change with directional icon
           Row(
             children: [
-              Icon(changeIcon, color: changeColor, size: 20),
+              Icon(display.icon, color: display.color, size: 20),
               const SizedBox(width: 4),
               Text(
                 '${isPositive ? '+' : ''}${asset.percentageChange.toStringAsFixed(2)}%',
                 style: TextStyle(
-                  color: changeColor,
+                  color: display.color,
                   fontSize: 18,
                   fontWeight: FontWeight.w600,
                 ),
@@ -257,12 +255,12 @@ class _MarketDataScreenState extends State<MarketDataScreen> {
           const SizedBox(height: 12),
           _buildDetailRow('Daily Low', '\$${asset.dailyLow.toStringAsFixed(2)}'),
           const SizedBox(height: 12),
-          _buildDetailRow('Volume', _formatVolume(asset.volume)),
+          _buildDetailRow('Volume', formatVolume(asset.volume)),
           const SizedBox(height: 12),
           _buildDetailRow(
             'Change',
             '${isPositive ? '+' : ''}${asset.percentageChange.toStringAsFixed(2)}%',
-            valueColor: changeColor,
+            valueColor: display.color,
           ),
         ],
       ),
@@ -323,18 +321,6 @@ class _MarketDataScreenState extends State<MarketDataScreen> {
     );
   }
 
-  /// Formats volume with K/M/B suffixes for readability.
-  String _formatVolume(double volume) {
-    if (volume >= 1e9) {
-      return '${(volume / 1e9).toStringAsFixed(2)}B';
-    } else if (volume >= 1e6) {
-      return '${(volume / 1e6).toStringAsFixed(2)}M';
-    } else if (volume >= 1e3) {
-      return '${(volume / 1e3).toStringAsFixed(2)}K';
-    }
-    return volume.toStringAsFixed(2);
-  }
-
   /// Formats a [DateTime] as HH:mm:ss.
   String _formatTimestamp(DateTime timestamp) {
     return '${timestamp.hour.toString().padLeft(2, '0')}:'
@@ -355,12 +341,8 @@ class _SearchResultTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final brightness = Theme.of(context).brightness;
+    final display = getPercentageDisplay(result.percentageChange);
     final isPositive = result.percentageChange >= 0;
-    final changeColor = isPositive
-        ? NeonColors.buyGreen(brightness)
-        : NeonColors.shortRed(brightness);
-    final changeIcon = isPositive ? Icons.arrow_upward : Icons.arrow_downward;
 
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(vertical: 4.0),
@@ -397,12 +379,12 @@ class _SearchResultTile extends StatelessWidget {
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(changeIcon, color: changeColor, size: 14),
+              Icon(display.icon, color: display.color, size: 14),
               const SizedBox(width: 2),
               Text(
                 '${isPositive ? '+' : ''}${result.percentageChange.toStringAsFixed(2)}%',
                 style: TextStyle(
-                  color: changeColor,
+                  color: display.color,
                   fontSize: 13,
                   fontWeight: FontWeight.w500,
                 ),

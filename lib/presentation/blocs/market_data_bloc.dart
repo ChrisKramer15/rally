@@ -1,131 +1,16 @@
 import 'dart:async';
 
-import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../data/repositories/market_data_repository.dart';
 import '../../domain/models/asset_price.dart';
-import '../../domain/models/asset_search_result.dart';
 import '../../domain/models/enums.dart';
+import '../../domain/models/price_update.dart';
+import 'market_data/market_data_event.dart';
+import 'market_data/market_data_state.dart';
 
-// ---------------------------------------------------------------------------
-// Events
-// ---------------------------------------------------------------------------
-
-/// Base class for all MarketData events.
-sealed class MarketDataEvent extends Equatable {
-  const MarketDataEvent();
-
-  @override
-  List<Object?> get props => [];
-}
-
-/// Triggers a search for assets matching [query].
-class SearchAsset extends MarketDataEvent {
-  final String query;
-
-  const SearchAsset(this.query);
-
-  @override
-  List<Object?> get props => [query];
-}
-
-/// Selects an asset by [symbol] to load detailed price info.
-class SelectAsset extends MarketDataEvent {
-  final String symbol;
-
-  const SelectAsset(this.symbol);
-
-  @override
-  List<Object?> get props => [symbol];
-}
-
-/// Subscribes to real-time price updates for a set of [symbols].
-class SubscribeSymbols extends MarketDataEvent {
-  final Set<String> symbols;
-
-  const SubscribeSymbols(this.symbols);
-
-  @override
-  List<Object?> get props => [symbols];
-}
-
-/// Internal event triggered when the connection status changes.
-class ConnectionStatusChanged extends MarketDataEvent {
-  final ConnectionStatus status;
-
-  const ConnectionStatusChanged(this.status);
-
-  @override
-  List<Object?> get props => [status];
-}
-
-// ---------------------------------------------------------------------------
-// States
-// ---------------------------------------------------------------------------
-
-/// Base class for all MarketData states.
-sealed class MarketDataState extends Equatable {
-  const MarketDataState();
-
-  @override
-  List<Object?> get props => [];
-}
-
-/// Initial state before any interaction.
-class MarketDataInitial extends MarketDataState {
-  const MarketDataInitial();
-}
-
-/// Searching for assets (loading state).
-class Searching extends MarketDataState {
-  const Searching();
-}
-
-/// Search completed with results.
-class SearchResults extends MarketDataState {
-  final List<AssetSearchResult> results;
-
-  const SearchResults(this.results);
-
-  @override
-  List<Object?> get props => [results];
-}
-
-/// Search returned no matching assets.
-class NoResults extends MarketDataState {
-  const NoResults();
-}
-
-/// Asset detail loaded for a selected symbol.
-class AssetDetail extends MarketDataState {
-  final AssetPrice assetPrice;
-
-  const AssetDetail(this.assetPrice);
-
-  @override
-  List<Object?> get props => [assetPrice];
-}
-
-/// An error occurred while performing a market data operation.
-class MarketDataError extends MarketDataState {
-  final String message;
-
-  const MarketDataError(this.message);
-
-  @override
-  List<Object?> get props => [message];
-}
-
-/// Connection to market data service was lost.
-class ConnectionWarning extends MarketDataState {
-  final DateTime lastUpdated;
-
-  const ConnectionWarning(this.lastUpdated);
-
-  @override
-  List<Object?> get props => [lastUpdated];
-}
+export 'market_data/market_data_event.dart';
+export 'market_data/market_data_state.dart';
 
 // ---------------------------------------------------------------------------
 // BLoC
@@ -135,6 +20,7 @@ class ConnectionWarning extends MarketDataState {
 class MarketDataBloc extends Bloc<MarketDataEvent, MarketDataState> {
   final MarketDataRepository _repository;
   StreamSubscription<ConnectionStatus>? _connectionSubscription;
+  StreamSubscription<PriceUpdate>? _priceSubscription;
 
   MarketDataBloc({required MarketDataRepository repository})
       : _repository = repository,
@@ -147,14 +33,36 @@ class MarketDataBloc extends Bloc<MarketDataEvent, MarketDataState> {
     _connectionSubscription = _repository.connectionStatus.listen(
       (status) => add(ConnectionStatusChanged(status)),
     );
+
+    _priceSubscription = _repository.priceStream.listen(_onPriceUpdate);
+  }
+
+  /// Handles incoming price updates from the WebSocket stream.
+  ///
+  /// If the BLoC is currently displaying an [AssetDetail] for the same symbol,
+  /// the state is updated with the new price data.
+  void _onPriceUpdate(PriceUpdate update) {
+    final currentState = state;
+    if (currentState is AssetDetail &&
+        currentState.assetPrice.symbol == update.symbol) {
+      // ignore: invalid_use_of_visible_for_testing_member
+      emit(AssetDetail(AssetPrice(
+        symbol: update.symbol,
+        price: update.price,
+        dailyHigh: update.dailyHigh,
+        dailyLow: update.dailyLow,
+        volume: update.volume,
+        percentageChange: update.percentageChange,
+        timestamp: update.timestamp,
+      )));
+    }
   }
 
   Future<void> _onSearchAsset(
     SearchAsset event,
     Emitter<MarketDataState> emit,
   ) async {
-    // Enforce minimum 1 character search input (Requirement 2.3).
-    if (event.query.length < 1) return;
+    if (event.query.isEmpty) return;
 
     emit(const Searching());
 
@@ -186,6 +94,7 @@ class MarketDataBloc extends Bloc<MarketDataEvent, MarketDataState> {
     SubscribeSymbols event,
     Emitter<MarketDataState> emit,
   ) {
+    _repository.subscribe(event.symbols);
     _repository.startPolling(event.symbols);
   }
 
@@ -202,6 +111,7 @@ class MarketDataBloc extends Bloc<MarketDataEvent, MarketDataState> {
   @override
   Future<void> close() {
     _connectionSubscription?.cancel();
+    _priceSubscription?.cancel();
     return super.close();
   }
 }

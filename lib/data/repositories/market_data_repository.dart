@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
+
 import '../../domain/models/asset_price.dart';
 import '../../domain/models/asset_search_result.dart';
 import '../../domain/models/enums.dart';
@@ -7,17 +9,26 @@ import '../../domain/models/ohlc_candle.dart';
 import '../../domain/models/price_update.dart';
 import '../../domain/services/i_market_data_service.dart';
 
+/// Internal cache entry storing an [AssetPrice] alongside the time it was
+/// fetched from the service.
+class CacheEntry {
+  final AssetPrice price;
+  final DateTime fetchedAt;
+
+  CacheEntry({required this.price, required this.fetchedAt});
+}
+
 /// Repository wrapping [IMarketDataService] with caching, polling, and
 /// timeout handling.
 ///
-/// Caches last-known prices per symbol for stale data fallback. Polls at
-/// 60-second intervals during market hours. Applies timeouts: 3 seconds for
-/// chart data, 60 seconds for portfolio price fetches.
+/// Caches last-known prices per symbol for stale data fallback. Applies a
+/// 60-second freshness window — cached prices younger than 60 seconds are
+/// returned without a network call.
 class MarketDataRepository {
   final IMarketDataService _service;
 
   /// Cache of last-known prices keyed by symbol.
-  final Map<String, AssetPrice> _priceCache = {};
+  final Map<String, CacheEntry> _cache = {};
 
   /// Duration after which a cached price is considered stale.
   static const Duration staleDuration = Duration(seconds: 60);
@@ -45,40 +56,56 @@ class MarketDataRepository {
   Stream<ConnectionStatus> get connectionStatus => _service.connectionStatus;
 
   /// Returns all currently cached prices.
-  Map<String, AssetPrice> getCachedPrices() => Map.unmodifiable(_priceCache);
+  Map<String, AssetPrice> getCachedPrices() =>
+      Map.unmodifiable(_cache.map((key, entry) => MapEntry(key, entry.price)));
 
   /// Returns `true` if the cached price for [symbol] is older than 60 seconds,
   /// or if no cached price exists.
   bool isStale(String symbol) {
-    final cached = _priceCache[symbol];
-    if (cached == null) return true;
-    return DateTime.now().difference(cached.timestamp) > staleDuration;
+    final entry = _cache[symbol];
+    if (entry == null) return true;
+    return DateTime.now().difference(entry.fetchedAt) > staleDuration;
+  }
+
+  /// Expires the cache entry for [symbol] by backdating its fetchedAt time.
+  ///
+  /// This is intended for testing purposes only, to simulate staleness without
+  /// waiting for the full stale duration.
+  @visibleForTesting
+  void expireCacheEntry(String symbol) {
+    final entry = _cache[symbol];
+    if (entry != null) {
+      _cache[symbol] = CacheEntry(
+        price: entry.price,
+        fetchedAt: DateTime.now().subtract(staleDuration + const Duration(seconds: 1)),
+      );
+    }
   }
 
   /// Fetches the current price for [symbol].
   ///
-  /// Returns cached price if available and fresh (< 60s old). Otherwise
+  /// Returns cached price if available and fresh (< 60s since fetch). Otherwise
   /// fetches from the service with a 60-second timeout. If the fetch fails
-  /// but a cached price exists, returns the cached price.
+  /// but a cached price exists, returns the cached price as fallback.
+  /// If no cached price exists, propagates the error.
   Future<AssetPrice> getPrice(String symbol) async {
-    final cached = _priceCache[symbol];
+    final entry = _cache[symbol];
 
-    // Return fresh cached price.
-    if (cached != null && !isStale(symbol)) {
-      return cached;
+    // Return fresh cached price without network call.
+    if (entry != null && !isStale(symbol)) {
+      return entry.price;
     }
 
     try {
-      final price = await _service
-          .getPrice(symbol)
-          .timeout(portfolioTimeout);
-      _priceCache[symbol] = price;
+      final price =
+          await _service.getPrice(symbol).timeout(portfolioTimeout);
+      _cache[symbol] = CacheEntry(price: price, fetchedAt: DateTime.now());
       return price;
     } on TimeoutException {
-      if (cached != null) return cached;
+      if (entry != null) return entry.price;
       rethrow;
     } catch (_) {
-      if (cached != null) return cached;
+      if (entry != null) return entry.price;
       rethrow;
     }
   }
@@ -86,6 +113,20 @@ class MarketDataRepository {
   /// Searches assets by [query], delegating directly to the service.
   Future<List<AssetSearchResult>> searchAssets(String query) {
     return _service.searchAssets(query);
+  }
+
+  /// Subscribe to real-time updates for a set of [symbols].
+  ///
+  /// Delegates directly to the underlying service.
+  void subscribe(Set<String> symbols) {
+    _service.subscribe(symbols);
+  }
+
+  /// Unsubscribe from real-time updates for a set of [symbols].
+  ///
+  /// Delegates directly to the underlying service.
+  void unsubscribe(Set<String> symbols) {
+    _service.unsubscribe(symbols);
   }
 
   /// Fetches OHLC chart data with a 3-second timeout.
@@ -131,10 +172,9 @@ class MarketDataRepository {
   Future<void> _pollPrices() async {
     for (final symbol in _pollingSymbols) {
       try {
-        final price = await _service
-            .getPrice(symbol)
-            .timeout(portfolioTimeout);
-        _priceCache[symbol] = price;
+        final price =
+            await _service.getPrice(symbol).timeout(portfolioTimeout);
+        _cache[symbol] = CacheEntry(price: price, fetchedAt: DateTime.now());
       } catch (_) {
         // Keep existing cached price on failure.
       }

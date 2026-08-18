@@ -104,6 +104,7 @@ class NoRecommendations extends ValuationsState {
 /// ones, sorts by R:R descending, and tracks completion when prices update.
 class ValuationsBloc extends Bloc<ValuationsEvent, ValuationsState> {
   final IValuationsEngine _engine;
+  // ignore: unused_field
   final MarketDataRepository _marketDataRepository;
 
   ValuationsBloc({
