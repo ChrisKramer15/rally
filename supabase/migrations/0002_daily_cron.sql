@@ -56,7 +56,7 @@ begin
       'Content-Type',  'application/json',
       'Authorization', 'Bearer ' || sr_key
     ),
-    body    := '{}'::jsonb
+    body    := jsonb_build_object('trigger', 'cron')
   );
 end;
 $$;

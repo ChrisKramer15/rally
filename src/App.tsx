@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { changePct } from './data/stocks'
 import { useIndexMarket } from './hooks/useIndexMarket'
 import { useWatchlist } from './hooks/useWatchlist'
@@ -6,9 +7,14 @@ import { IndexCard } from './components/IndexCard'
 import { Watchlist } from './components/Watchlist'
 import { WatchlistEditor } from './components/WatchlistEditor'
 import { Movers } from './components/Movers'
+import { DataPipeline } from './components/DataPipeline'
 import './App.css'
 
+type View = 'dashboard' | 'pipeline'
+
 function App() {
+  const [view, setView] = useState<View>('dashboard')
+
   // Index cards: real daily data via ETF proxies (SPY/QQQ/DIA) from Supabase.
   const { indices } = useIndexMarket()
 
@@ -56,6 +62,22 @@ function App() {
           </h1>
           <span className="tag">Market Dashboard</span>
         </div>
+        <nav className="app-nav">
+          <button
+            type="button"
+            className={`nav-tab ${view === 'dashboard' ? 'active' : ''}`}
+            onClick={() => setView('dashboard')}
+          >
+            Dashboard
+          </button>
+          <button
+            type="button"
+            className={`nav-tab ${view === 'pipeline' ? 'active' : ''}`}
+            onClick={() => setView('pipeline')}
+          >
+            Data Pipeline
+          </button>
+        </nav>
         <div className="status">
           <span className="live-dot" />
           <span>{status === 'simulated' ? 'DEMO' : 'LIVE'}</span>
@@ -70,22 +92,28 @@ function App() {
         </div>
       </header>
 
-      {error && <div className="feed-error-banner">{error}</div>}
+      {view === 'dashboard' && error && <div className="feed-error-banner">{error}</div>}
 
-      <section className="index-grid">
-        {indices.map((q) => (
-          <IndexCard key={q.symbol} quote={q} />
-        ))}
-      </section>
+      {view === 'dashboard' ? (
+        <>
+          <section className="index-grid">
+            {indices.map((q) => (
+              <IndexCard key={q.symbol} quote={q} />
+            ))}
+          </section>
 
-      <section className="main-grid">
-        <Watchlist
-          stocks={stocks}
-          flash={flash}
-          action={<WatchlistEditor symbols={symbols} onSave={setSymbols} />}
-        />
-        <Movers stocks={stocks} />
-      </section>
+          <section className="main-grid">
+            <Watchlist
+              stocks={stocks}
+              flash={flash}
+              action={<WatchlistEditor symbols={symbols} onSave={setSymbols} />}
+            />
+            <Movers stocks={stocks} />
+          </section>
+        </>
+      ) : (
+        <DataPipeline />
+      )}
 
       <footer className="app-footer">
         <span>

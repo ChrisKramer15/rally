@@ -104,6 +104,35 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100
 }
 
+// Persist a single run record. Best-effort: logging must never mask the actual
+// run outcome, so failures here are swallowed (the collector already succeeded
+// or failed on its own terms).
+async function logRun(
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  row: {
+    status: 'success' | 'partial' | 'failure'
+    started_at: string
+    duration_ms: number
+    trigger: string
+    symbols_total: number
+    symbols_failed: number
+    bars_collected: number
+    per_symbol: Record<string, number>
+    errors: Record<string, string>
+    message?: string
+  },
+): Promise<void> {
+  try {
+    await supabase.from('pipeline_runs').insert({
+      ...row,
+      finished_at: new Date().toISOString(),
+    })
+  } catch (e) {
+    console.error('pipeline_runs insert failed:', e instanceof Error ? e.message : String(e))
+  }
+}
+
 // --- handler ---------------------------------------------------------------
 
 Deno.serve(async (req) => {
@@ -111,27 +140,35 @@ Deno.serve(async (req) => {
     return new Response('ok', { headers: corsHeaders })
   }
 
+  const startedAt = new Date()
+  const runStart = performance.now()
+  const elapsed = () => Math.round(performance.now() - runStart)
+
   const tiingoKey = Deno.env.get('TIINGO_KEY')
   const supabaseUrl = Deno.env.get('SUPABASE_URL')
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
 
   if (!tiingoKey || !supabaseUrl || !serviceRoleKey) {
+    // No service-role client available here to log with; can't persist a run.
     return json({ error: 'Missing required environment/secrets.' }, 500)
   }
 
-  // Service-role client bypasses RLS so it can write to prices.
+  // Service-role client bypasses RLS so it can write to prices + pipeline_runs.
   const supabase = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false },
   })
 
-  // Optional overrides via POST body: { symbols?: string[], lookbackDays?: number }
+  // Optional overrides via POST body:
+  //   { symbols?: string[], lookbackDays?: number, trigger?: string }
   let symbols: string[] | undefined
   let lookbackDays = DEFAULT_LOOKBACK_DAYS
+  let trigger = 'unknown'
   try {
     if (req.headers.get('content-type')?.includes('application/json')) {
       const body = await req.json()
       if (Array.isArray(body?.symbols)) symbols = body.symbols
       if (Number.isFinite(body?.lookbackDays)) lookbackDays = body.lookbackDays
+      if (typeof body?.trigger === 'string' && body.trigger) trigger = body.trigger
     }
   } catch {
     // No/invalid body is fine; fall back to the watchlist + defaults.
@@ -143,11 +180,37 @@ Deno.serve(async (req) => {
       .from('watchlist')
       .select('symbol')
       .eq('active', true)
-    if (error) return json({ error: `watchlist read failed: ${error.message}` }, 500)
+    if (error) {
+      await logRun(supabase, {
+        status: 'failure',
+        started_at: startedAt.toISOString(),
+        duration_ms: elapsed(),
+        trigger,
+        symbols_total: 0,
+        symbols_failed: 0,
+        bars_collected: 0,
+        per_symbol: {},
+        errors: {},
+        message: `watchlist read failed: ${error.message}`,
+      })
+      return json({ error: `watchlist read failed: ${error.message}` }, 500)
+    }
     symbols = (data ?? []).map((r) => r.symbol)
   }
 
   if (symbols.length === 0) {
+    await logRun(supabase, {
+      status: 'success',
+      started_at: startedAt.toISOString(),
+      duration_ms: elapsed(),
+      trigger,
+      symbols_total: 0,
+      symbols_failed: 0,
+      bars_collected: 0,
+      per_symbol: {},
+      errors: {},
+      message: 'No active symbols to collect.',
+    })
     return json({ ok: true, message: 'No active symbols to collect.', collected: 0 })
   }
 
@@ -183,12 +246,26 @@ Deno.serve(async (req) => {
   }
 
   const collected = Object.values(results).reduce((a, b) => a + b, 0)
+  const failedCount = Object.keys(errors).length
+
+  await logRun(supabase, {
+    status: failedCount === 0 ? 'success' : 'partial',
+    started_at: startedAt.toISOString(),
+    duration_ms: elapsed(),
+    trigger,
+    symbols_total: symbols.length,
+    symbols_failed: failedCount,
+    bars_collected: collected,
+    per_symbol: results,
+    errors,
+  })
+
   return json({
-    ok: Object.keys(errors).length === 0,
+    ok: failedCount === 0,
     symbols: symbols.length,
     collected,
     perSymbol: results,
-    errors: Object.keys(errors).length ? errors : undefined,
+    errors: failedCount ? errors : undefined,
   })
 })
 
