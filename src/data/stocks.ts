@@ -80,6 +80,33 @@ export const INITIAL_INDICES: IndexQuote[] = [
   { symbol: 'VIX', name: 'Volatility', value: 13.42, prevClose: 14.05, history: makeHistory(31, 13.8) },
 ]
 
+/**
+ * Broad-market indices are shown via their liquid ETF proxies, since the app is
+ * scoped to stocks & ETFs and Tiingo's free EOD tier covers ETFs cleanly (raw
+ * index symbols like ^GSPC are not reliably available). Each proxy flows through
+ * the exact same Supabase daily-bar pipeline as watchlist symbols.
+ *
+ * `symbol` is the ETF ticker actually stored/fetched; `label` is the index name
+ * shown on the card. VIX is intentionally omitted — there's no clean spot-VIX
+ * ETF (VIX products track futures and diverge), and it doesn't fit the daily
+ * OHLCV model.
+ */
+export interface IndexProxy {
+  /** ETF ticker fetched from Tiingo/Supabase. */
+  symbol: string
+  /** Friendly index name shown on the card. */
+  label: string
+}
+
+export const INDEX_PROXIES: IndexProxy[] = [
+  { symbol: 'SPY', label: 'S&P 500' },
+  { symbol: 'QQQ', label: 'Nasdaq 100' },
+  { symbol: 'DIA', label: 'Dow Jones' },
+]
+
+/** The ETF proxy symbols the index cards track. */
+export const INDEX_PROXY_SYMBOLS: string[] = INDEX_PROXIES.map((p) => p.symbol)
+
 // Maximum number of tickers the watchlist (Tier 1) will track. A daily pull is
 // one Tiingo request per symbol; 40 fits comfortably in a single hourly window
 // (free tier ~50/hr) and barely touches the 500-unique-symbols/month cap.

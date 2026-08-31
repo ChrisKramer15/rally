@@ -1,5 +1,5 @@
 import { changePct } from './data/stocks'
-import { useLiveMarket } from './hooks/useLiveMarket'
+import { useIndexMarket } from './hooks/useIndexMarket'
 import { useWatchlist } from './hooks/useWatchlist'
 import { useWatchlistMarket } from './hooks/useWatchlistMarket'
 import { IndexCard } from './components/IndexCard'
@@ -9,8 +9,8 @@ import { Movers } from './components/Movers'
 import './App.css'
 
 function App() {
-  // Indices keep the existing simulated feed for now.
-  const { indices } = useLiveMarket(60000)
+  // Index cards: real daily data via ETF proxies (SPY/QQQ/DIA) from Supabase.
+  const { indices } = useIndexMarket()
 
   // Watchlist symbols are user-defined (pasted from a scanner) and persisted.
   const { symbols, setSymbols } = useWatchlist()
