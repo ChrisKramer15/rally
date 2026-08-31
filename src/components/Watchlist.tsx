@@ -1,17 +1,23 @@
+import type { ReactNode } from 'react'
 import { changePct, formatCurrency, type Stock } from '../data/stocks'
 import { Sparkline } from './Sparkline'
 
 interface WatchlistProps {
   stocks: Stock[]
   flash: Record<string, 'up' | 'down'>
+  /** Optional action rendered in the panel header, e.g. the paste-tickers button. */
+  action?: ReactNode
 }
 
-export function Watchlist({ stocks, flash }: WatchlistProps) {
+export function Watchlist({ stocks, flash, action }: WatchlistProps) {
   return (
     <div className="panel watchlist">
       <div className="panel-head">
         <h2>Watchlist</h2>
-        <span className="panel-sub">{stocks.length} symbols</span>
+        <div className="panel-head-actions">
+          <span className="panel-sub">{stocks.length} symbols</span>
+          {action}
+        </div>
       </div>
       <div className="watch-row watch-head">
         <span>Symbol</span>
@@ -19,6 +25,11 @@ export function Watchlist({ stocks, flash }: WatchlistProps) {
         <span className="col-num">Price</span>
         <span className="col-num">Change</span>
       </div>
+      {stocks.length === 0 && (
+        <div className="watch-empty">
+          No symbols yet. Use “Paste tickers” to add your scanner results.
+        </div>
+      )}
       <ul className="watch-list">
         {stocks.map((s) => {
           const pct = changePct(s.price, s.prevClose)

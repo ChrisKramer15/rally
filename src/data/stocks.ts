@@ -39,6 +39,43 @@ export const INITIAL_STOCKS: Stock[] = [
   { symbol: 'GOOGL', name: 'Alphabet Inc.', price: 205.77, prevClose: 207.41, history: makeHistory(9, 206) },
   { symbol: 'META', name: 'Meta Platforms', price: 748.31, prevClose: 731.5, history: makeHistory(13, 740) },
   { symbol: 'AMD', name: 'Adv. Micro Devices', price: 168.9, prevClose: 170.22, history: makeHistory(17, 169) },
+  { symbol: 'NFLX', name: 'Netflix, Inc.', price: 892.4, prevClose: 878.15, history: makeHistory(19, 885) },
+  { symbol: 'INTC', name: 'Intel Corp.', price: 24.31, prevClose: 24.88, history: makeHistory(23, 24.5) },
+  { symbol: 'CRM', name: 'Salesforce, Inc.', price: 342.77, prevClose: 338.9, history: makeHistory(29, 340) },
+  { symbol: 'ORCL', name: 'Oracle Corp.', price: 188.62, prevClose: 191.04, history: makeHistory(31, 189) },
+  { symbol: 'ADBE', name: 'Adobe Inc.', price: 512.18, prevClose: 519.33, history: makeHistory(37, 515) },
+  { symbol: 'CSCO', name: 'Cisco Systems', price: 61.44, prevClose: 60.9, history: makeHistory(41, 61) },
+  { symbol: 'QCOM', name: 'Qualcomm Inc.', price: 172.55, prevClose: 174.2, history: makeHistory(43, 173) },
+  { symbol: 'TXN', name: 'Texas Instruments', price: 205.9, prevClose: 203.44, history: makeHistory(47, 204) },
+  { symbol: 'AVGO', name: 'Broadcom Inc.', price: 1642.3, prevClose: 1618.75, history: makeHistory(53, 1630) },
+  { symbol: 'PYPL', name: 'PayPal Holdings', price: 84.12, prevClose: 85.6, history: makeHistory(59, 85) },
+  { symbol: 'UBER', name: 'Uber Technologies', price: 78.35, prevClose: 76.9, history: makeHistory(61, 77.5) },
+  { symbol: 'SHOP', name: 'Shopify Inc.', price: 118.44, prevClose: 121.02, history: makeHistory(67, 119) },
+  { symbol: 'JPM', name: 'JPMorgan Chase', price: 268.9, prevClose: 265.15, history: makeHistory(71, 267) },
+  { symbol: 'BAC', name: 'Bank of America', price: 47.62, prevClose: 46.98, history: makeHistory(73, 47.2) },
+  { symbol: 'WFC', name: 'Wells Fargo', price: 78.11, prevClose: 77.4, history: makeHistory(79, 77.8) },
+  { symbol: 'GS', name: 'Goldman Sachs', price: 612.45, prevClose: 604.9, history: makeHistory(83, 608) },
+  { symbol: 'MS', name: 'Morgan Stanley', price: 138.7, prevClose: 137.22, history: makeHistory(89, 138) },
+  { symbol: 'V', name: 'Visa Inc.', price: 342.18, prevClose: 344.6, history: makeHistory(97, 343) },
+  { symbol: 'MA', name: 'Mastercard Inc.', price: 548.9, prevClose: 543.2, history: makeHistory(101, 546) },
+  { symbol: 'DIS', name: 'Walt Disney Co.', price: 114.62, prevClose: 116.05, history: makeHistory(103, 115) },
+  { symbol: 'KO', name: 'Coca-Cola Co.', price: 70.44, prevClose: 69.9, history: makeHistory(107, 70.2) },
+  { symbol: 'PEP', name: 'PepsiCo, Inc.', price: 152.31, prevClose: 153.8, history: makeHistory(109, 153) },
+  { symbol: 'MCD', name: "McDonald's Corp.", price: 308.75, prevClose: 305.4, history: makeHistory(113, 307) },
+  { symbol: 'NKE', name: 'Nike, Inc.', price: 78.9, prevClose: 80.15, history: makeHistory(127, 79.5) },
+  { symbol: 'SBUX', name: 'Starbucks Corp.', price: 98.44, prevClose: 96.9, history: makeHistory(131, 97.5) },
+  { symbol: 'WMT', name: 'Walmart Inc.', price: 102.18, prevClose: 101.3, history: makeHistory(137, 101.8) },
+  { symbol: 'COST', name: 'Costco Wholesale', price: 942.6, prevClose: 951.2, history: makeHistory(139, 947) },
+  { symbol: 'HD', name: 'Home Depot', price: 412.9, prevClose: 408.5, history: makeHistory(149, 410) },
+  { symbol: 'PG', name: 'Procter & Gamble', price: 168.44, prevClose: 169.9, history: makeHistory(151, 169) },
+  { symbol: 'JNJ', name: 'Johnson & Johnson', price: 162.3, prevClose: 160.85, history: makeHistory(157, 161.5) },
+  { symbol: 'PFE', name: 'Pfizer Inc.', price: 26.11, prevClose: 26.55, history: makeHistory(163, 26.3) },
+  { symbol: 'MRK', name: 'Merck & Co.', price: 98.75, prevClose: 97.4, history: makeHistory(167, 98) },
+  { symbol: 'XOM', name: 'Exxon Mobil', price: 118.6, prevClose: 116.9, history: makeHistory(173, 117.8) },
+  { symbol: 'CVX', name: 'Chevron Corp.', price: 162.44, prevClose: 164.1, history: makeHistory(179, 163) },
+  { symbol: 'BA', name: 'Boeing Co.', price: 182.9, prevClose: 178.5, history: makeHistory(181, 180) },
+  { symbol: 'CAT', name: 'Caterpillar Inc.', price: 412.18, prevClose: 405.9, history: makeHistory(191, 409) },
+  { symbol: 'GE', name: 'GE Aerospace', price: 268.75, prevClose: 264.2, history: makeHistory(193, 266) },
 ]
 
 export const INITIAL_INDICES: IndexQuote[] = [
@@ -47,6 +84,33 @@ export const INITIAL_INDICES: IndexQuote[] = [
   { symbol: 'DJI', name: 'Dow Jones', value: 45012.5, prevClose: 45188.2, history: makeHistory(29, 45100) },
   { symbol: 'VIX', name: 'Volatility', value: 13.42, prevClose: 14.05, history: makeHistory(31, 13.8) },
 ]
+
+// Maximum number of tickers the watchlist will track. Keeps us under Finnhub's
+// 60 req/min free-tier limit when polling every 60 seconds.
+export const MAX_WATCHLIST = 45
+
+/** Default watchlist symbols, derived from the seed stocks. */
+export const DEFAULT_SYMBOLS: string[] = INITIAL_STOCKS.map((s) => s.symbol)
+
+/**
+ * Parse a free-form pasted string into a clean, deduped, uppercased list of
+ * ticker symbols. Accepts commas, whitespace, and newlines as separators.
+ * Caps the result at MAX_WATCHLIST.
+ */
+export function parseTickers(raw: string, max = MAX_WATCHLIST): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const token of raw.split(/[\s,]+/)) {
+    const sym = token.trim().toUpperCase()
+    // Allow letters, digits, dots and dashes (e.g. BRK.B, crypto/forex pairs).
+    if (!sym || !/^[A-Z0-9.\-:]+$/.test(sym)) continue
+    if (seen.has(sym)) continue
+    seen.add(sym)
+    out.push(sym)
+    if (out.length >= max) break
+  }
+  return out
+}
 
 export function changePct(current: number, prevClose: number): number {
   return ((current - prevClose) / prevClose) * 100
