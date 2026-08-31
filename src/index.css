@@ -1,0 +1,87 @@
+:root {
+  /* dark base */
+  --bg: #0a0b12;
+  --bg-2: #10121d;
+  --panel: rgba(20, 23, 38, 0.75);
+  --panel-border: rgba(120, 90, 255, 0.18);
+  --text: #c7cbe0;
+  --text-h: #f4f5ff;
+  --muted: #6b7092;
+
+  /* neon accents */
+  --neon-purple: #b14dff;
+  --neon-cyan: #22e3ff;
+  --neon-green: #29ffb0;
+  --neon-red: #ff4d6d;
+  --neon-pink: #ff3df2;
+
+  --accent: var(--neon-purple);
+  --glow: 0 0 18px rgba(177, 77, 255, 0.45);
+
+  --sans: 'Segoe UI', system-ui, Roboto, sans-serif;
+  --mono: ui-monospace, 'Cascadia Code', Consolas, monospace;
+
+  color-scheme: dark;
+  font: 16px/1.5 var(--sans);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  background:
+    radial-gradient(1200px 700px at 15% -10%, rgba(177, 77, 255, 0.16), transparent 60%),
+    radial-gradient(1000px 600px at 100% 0%, rgba(34, 227, 255, 0.12), transparent 55%),
+    linear-gradient(180deg, var(--bg-2), var(--bg));
+  background-attachment: fixed;
+  min-height: 100svh;
+}
+
+#root {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 0 24px 40px;
+}
+
+h1,
+h2,
+h3 {
+  color: var(--text-h);
+  font-weight: 600;
+  margin: 0;
+}
+
+.up {
+  color: var(--neon-green);
+}
+.down {
+  color: var(--neon-red);
+}
+
+::selection {
+  background: rgba(177, 77, 255, 0.4);
+  color: #fff;
+}
+
+/* thin neon scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(177, 77, 255, 0.4);
+  border-radius: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
