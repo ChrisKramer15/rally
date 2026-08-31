@@ -5,61 +5,132 @@ live quotes and trend sparklines.
 
 ## Market data
 
-- **Provider:** [Finnhub](https://finnhub.io) (`/quote`), polled every 60 seconds.
-  The free tier allows 60 requests/minute, which covers the 45-symbol watchlist cap.
-- **API key:** set `VITE_FINNHUB_KEY` in a local `.env` (see `.env.example`).
-  Without a key, the app runs on a simulated feed and shows a "DEMO / simulated" pill.
-- **Watchlist:** curated by pasting tickers (e.g. from a scanner such as Scanz) via
-  the "Paste tickers" button. Symbols persist to `localStorage` (`rally.watchlist`),
-  capped at 45.
-- **Trend history:** sparklines show **real polled points only** — no synthetic
-  seeding. History accumulates one point per poll and is persisted so it survives
-  reloads (see below).
+Rally is a **daily** (swing-trading) dashboard scoped to **US stocks & ETFs**.
+Crypto/forex (24/7 tickers) are intentionally out of scope — they need different
+freshness logic.
 
-## Trend history persistence (and the database migration)
+- **Provider:** [Tiingo](https://www.tiingo.com) End-of-Day (EOD) daily bars,
+  collected **server-side** and stored in Supabase. The browser reads bars from
+  Supabase (CORS-safe); it never calls Tiingo directly (Tiingo isn't
+  CORS-enabled, which is what forced the server-side collector). Tiingo free
+  tier: ~50 req/hour, 1,000/day, **500 unique symbols/month** — now consumed by
+  the collector, not the browser.
+- **Config:** set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in a local
+  `.env` (see `.env.example`). Without them, the app runs on a simulated feed and
+  shows a "DEMO / simulated" pill. The Tiingo token is a Supabase *secret* used
+  only by the collector — it is never shipped to the browser.
+- **Watchlist (Tier 1):** curated by pasting tickers (e.g. from a scanner such as
+  Scanz) via the "Paste tickers" button. Symbols persist to `localStorage`
+  (`rally.watchlist`), capped at 40. This is the primary list, fetched first.
+- **Trend history:** sparklines plot **real adjusted daily closes** from Tiingo.
+  Adjusted values keep splits/dividends from creating artificial jumps.
 
-Price history is stored behind a small swappable interface in
-`src/data/historyStore.ts`:
+### Trading-day freshness cache (Tier 2)
 
-```ts
-interface HistoryStore {
-  load(symbols: string[]): Promise<SymbolHistory>
-  save(history: SymbolHistory): Promise<void>
-}
+Daily bars don't change intraday, so the app caches them and only fetches
+**stale** symbols. Freshness is tied to the US regular-session close:
+
+- A session's bar is treated as **final one minute after the close (4:01 PM ET)**.
+- Before that cutoff (and on weekends), the last confirmed session's bar is reused.
+- After the cutoff, cached symbols go stale and the next visit pulls the new bar
+  exactly once.
+
+Implementation:
+
+- `src/data/marketCalendar.ts` — `effectiveTradingDay()` / `isFresh()`,
+  timezone-aware (America/New_York), dependency-free. Models the regular Mon–Fri
+  session and the post-close cutoff; it does **not** track market holidays
+  (a missing provider bar on a holiday is simply a no-op for the cache).
+- `src/data/tiingo.ts` — the EOD client (`fetchDailyBars`, `fetchName`).
+- `src/data/dailyCache.ts` — the localStorage cache (`rally.dailyCache.v1`),
+  freshness partition, and a **monthly usage meter** (`rally.usage.v1`) that
+  tracks unique symbols against the 500/month cap and is surfaced in the header.
+
+Net effect: refreshing the page or revisiting later in the day costs **~0
+requests** — a 40-symbol watchlist pulls once per trading day and re-renders
+from cache after that.
+
+## Backend: Supabase (daily collector + shared storage)
+
+The browser can't call Tiingo directly (no CORS), so a small Supabase backend
+does three things: **stores** daily bars, **collects** them on a daily schedule
+server-side, and **serves** them to the browser with CORS + read-only RLS.
+
+```
+pg_cron (daily, after close)
+   -> invoke_daily_collector()  (pg_net -> Edge Function)
+      -> collect-daily-bars  (reads watchlist, pulls Tiingo, upserts prices)
+                                        |
+browser  --(anon key, read-only)-->  prices table  (RLS: public select only)
 ```
 
-The current implementation, `LocalHistoryStore`, is backed by `localStorage`
-(key `rally.history`, 40-point rolling window per symbol). The interface is
-async so a database-backed implementation can replace it without touching the
-consuming hook (`useWatchlistMarket`) or any component.
+Files:
 
-**Why a database is the planned next step (before the trade-recommendation sprint):**
+- `supabase/migrations/0001_prices_schema.sql` — `prices` + `watchlist` tables,
+  indexes, and RLS (public read; writes only via the service role).
+- `supabase/functions/collect-daily-bars/index.ts` — the collector (Deno Edge
+  Function). Pulls adjusted Tiingo bars for the active watchlist and upserts.
+- `supabase/migrations/0002_daily_cron.sql` — `pg_cron` job (Mon–Fri 21:10 UTC,
+  safely after the US close in both DST states) that invokes the function via
+  `pg_net`, reading the function URL + service-role key from Supabase Vault.
+- `src/data/supabaseClient.ts` / `src/data/supabaseDailyStore.ts` — the
+  browser read path (anon key). `src/data/tiingo.ts` now only holds the shared
+  `DailyBar` type; the Tiingo *fetch* lives server-side in the Edge Function.
 
-- `localStorage` is per-browser and per-device — history isn't shared across
-  users or devices, which a recommendation engine needs.
-- History only accumulates while the app is open, leaving gaps (overnight,
-  pre-market) — exactly the data a gap/RVOL strategy depends on.
-- It's small (~5 MB) and user-clearable — unsuitable for backtesting a large
-  universe over time.
-- Indicators like RVOL and gap % need server-side historical averages, not
-  browser-side partial data.
+### One-time setup
 
-**Migration outline (later task, no backend built yet):**
+```bash
+# 1) Link the CLI to your project (get the ref from the dashboard URL)
+supabase login
+supabase link --project-ref YOUR_PROJECT_REF
 
-1. Stand up a backend job that polls Finnhub (or a bulk provider) on a schedule
-   and writes to a `prices(symbol, ts, price, volume)` table (Postgres or a
-   time-series DB such as TimescaleDB/InfluxDB). A server-side collector also
-   sidesteps client rate limits and the free-tier "personal use only" terms.
-2. Add `class ApiHistoryStore implements HistoryStore` that fetches from that
-   backend.
-3. Swap the exported `historyStore` singleton in `src/data/historyStore.ts` to
-   the new implementation. The dashboard and recommendation engine then read
-   shared, gap-free history.
+# 2) Apply the schema + cron migrations
+supabase db push
 
-> Note: Scanz has no public API — it's an end-user scanner platform. Scanner
-> output is brought in manually via "Paste tickers". A fully automated scan
-> would require a programmable source (e.g. Polygon's full-market snapshot) in a
-> later sprint.
+# 3) Store the Tiingo token as a secret (server-side only, never in the client)
+supabase secrets set TIINGO_KEY=your_tiingo_token
+
+# 4) Deploy the collector
+supabase functions deploy collect-daily-bars
+
+# 5) In the SQL editor, populate Vault so cron can call the function
+#    (see the commented block in 0002_daily_cron.sql):
+#    select vault.create_secret('https://YOUR_REF.supabase.co/functions/v1/collect-daily-bars','collect_daily_bars_url');
+#    select vault.create_secret('YOUR_SERVICE_ROLE_KEY','service_role_key');
+
+# 6) Seed the watchlist, then run the collector once to backfill:
+#    insert into watchlist (symbol) values ('AAPL'),('NVDA'),... ;
+supabase functions invoke collect-daily-bars
+```
+
+Then set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in `.env` (Project
+Settings → API) and run the app — the header shows **LIVE** once bars are read.
+
+### Watchlist sync
+
+Pasting tickers in the app also **syncs them up to the Supabase `watchlist`
+table** (`syncWatchlist` in `supabaseDailyStore.ts`, called from
+`useWatchlist.save`). The daily collector reads that table, so anything you add
+is tracked automatically on the next run — no manual seeding.
+
+This needs a client write, so `migrations/0003_watchlist_client_insert.sql`
+grants anon/authenticated **INSERT on `watchlist` only** (with a ticker-format
+check). Everything else stays locked: `prices` is read-only for anon, and
+`watchlist` UPDATE/DELETE are denied. Newly added symbols are picked up by the
+next nightly cron run (the browser does not trigger the collector directly, to
+avoid a public invoke surface / Tiingo-budget abuse). If this ever goes
+multi-user, swap that policy for an authenticated-only one tied to `auth.uid()`.
+
+> Note: `pg_cron`'s minimum granularity is 1 minute (irrelevant for a daily
+> job). Free projects pause after ~a week idle, but the daily cron counts as
+> activity and keeps it awake.
+
+> Note: `src/data/historyStore.ts` (the older `localStorage` `HistoryStore`) is
+> retained only for its shared `HISTORY_LEN` constant; the daily pipeline uses
+> `dailyCache.ts` (bars carry OHLCV + a per-symbol `lastFetchedTradingDay`).
+
+> Note: Scanz has no public API — scanner output is brought in manually via
+> "Paste tickers". A fully automated scan would need a programmable source later.
 
 ---
 

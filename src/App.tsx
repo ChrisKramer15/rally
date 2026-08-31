@@ -15,8 +15,12 @@ function App() {
   // Watchlist symbols are user-defined (pasted from a scanner) and persisted.
   const { symbols, setSymbols } = useWatchlist()
 
-  // Live watchlist data from Finnhub (60s cadence), simulated when no key is set.
-  const { stocks, flash, lastUpdated, status, error } = useWatchlistMarket(symbols, 60000)
+  // Daily watchlist data from Tiingo, cached per trading day; simulated when no key is set.
+  const { stocks, flash, lastUpdated, status, error, usage } = useWatchlistMarket(symbols)
+
+  // Ticker tape is always sorted alphabetically, regardless of the watchlist's
+  // own sort control.
+  const tickerStocks = [...stocks].sort((a, b) => a.symbol.localeCompare(b.symbol))
 
   const updatedLabel = lastUpdated
     ? lastUpdated.toLocaleTimeString('en-US', { hour12: false })
@@ -24,10 +28,10 @@ function App() {
 
   return (
     <div className="dashboard">
-      {/* Ticker tape */}
+      {/* Ticker tape — always alphabetized, independent of watchlist sort. */}
       <div className="ticker-tape">
         <div className="ticker-track">
-          {[...stocks, ...stocks].map((s, i) => {
+          {[...tickerStocks, ...tickerStocks].map((s, i) => {
             const pct = changePct(s.price, s.prevClose)
             const positive = pct >= 0
             return (
@@ -59,6 +63,10 @@ function App() {
           {status === 'error' && <span className="feed-status error">feed error</span>}
           <span className="sep">·</span>
           <span className="muted">Updated {updatedLabel}</span>
+          <span className="sep">·</span>
+          <span className="muted" title="Distinct symbols this app has cached this month (informational)">
+            {usage.uniqueSymbolCount} symbols cached
+          </span>
         </div>
       </header>
 
@@ -81,7 +89,7 @@ function App() {
 
       <footer className="app-footer">
         <span>
-          Watchlist quotes via Finnhub. Curate symbols from your scanner. Not financial advice.
+          Daily bars via Supabase (collected from Tiingo; US stocks &amp; ETFs). Curate symbols from your scanner. Not financial advice.
         </span>
       </footer>
     </div>

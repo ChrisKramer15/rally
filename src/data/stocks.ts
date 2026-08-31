@@ -71,11 +71,6 @@ export const INITIAL_STOCKS: Stock[] = [
   { symbol: 'JNJ', name: 'Johnson & Johnson', price: 162.3, prevClose: 160.85, history: makeHistory(157, 161.5) },
   { symbol: 'PFE', name: 'Pfizer Inc.', price: 26.11, prevClose: 26.55, history: makeHistory(163, 26.3) },
   { symbol: 'MRK', name: 'Merck & Co.', price: 98.75, prevClose: 97.4, history: makeHistory(167, 98) },
-  { symbol: 'XOM', name: 'Exxon Mobil', price: 118.6, prevClose: 116.9, history: makeHistory(173, 117.8) },
-  { symbol: 'CVX', name: 'Chevron Corp.', price: 162.44, prevClose: 164.1, history: makeHistory(179, 163) },
-  { symbol: 'BA', name: 'Boeing Co.', price: 182.9, prevClose: 178.5, history: makeHistory(181, 180) },
-  { symbol: 'CAT', name: 'Caterpillar Inc.', price: 412.18, prevClose: 405.9, history: makeHistory(191, 409) },
-  { symbol: 'GE', name: 'GE Aerospace', price: 268.75, prevClose: 264.2, history: makeHistory(193, 266) },
 ]
 
 export const INITIAL_INDICES: IndexQuote[] = [
@@ -85,9 +80,10 @@ export const INITIAL_INDICES: IndexQuote[] = [
   { symbol: 'VIX', name: 'Volatility', value: 13.42, prevClose: 14.05, history: makeHistory(31, 13.8) },
 ]
 
-// Maximum number of tickers the watchlist will track. Keeps us under Finnhub's
-// 60 req/min free-tier limit when polling every 60 seconds.
-export const MAX_WATCHLIST = 45
+// Maximum number of tickers the watchlist (Tier 1) will track. A daily pull is
+// one Tiingo request per symbol; 40 fits comfortably in a single hourly window
+// (free tier ~50/hr) and barely touches the 500-unique-symbols/month cap.
+export const MAX_WATCHLIST = 40
 
 /** Default watchlist symbols, derived from the seed stocks. */
 export const DEFAULT_SYMBOLS: string[] = INITIAL_STOCKS.map((s) => s.symbol)
@@ -102,8 +98,10 @@ export function parseTickers(raw: string, max = MAX_WATCHLIST): string[] {
   const out: string[] = []
   for (const token of raw.split(/[\s,]+/)) {
     const sym = token.trim().toUpperCase()
-    // Allow letters, digits, dots and dashes (e.g. BRK.B, crypto/forex pairs).
-    if (!sym || !/^[A-Z0-9.\-:]+$/.test(sym)) continue
+    // US stocks & ETFs only. Allow letters, digits, dots and dashes (e.g.
+    // BRK.B, BF-B). The ':' pair syntax (crypto/forex like BINANCE:BTCUSDT) is
+    // intentionally excluded — those are 24/7 tickers with different freshness.
+    if (!sym || !/^[A-Z0-9.-]+$/.test(sym)) continue
     if (seen.has(sym)) continue
     seen.add(sym)
     out.push(sym)

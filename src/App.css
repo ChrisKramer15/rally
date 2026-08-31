@@ -17,7 +17,7 @@
   gap: 40px;
   padding: 10px 24px;
   white-space: nowrap;
-  animation: ticker 32s linear infinite;
+  animation: ticker 120s linear infinite;
 }
 .ticker-tape:hover .ticker-track {
   animation-play-state: paused;
@@ -560,6 +560,51 @@
   text-align: center;
   color: var(--muted);
   font-size: 13px;
+}
+
+.watch-sort {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+}
+.sort-btn {
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.sort-btn:hover {
+  color: var(--text-h);
+}
+.sort-btn.active {
+  color: #fff;
+  background: var(--neon-purple);
+}
+
+.watch-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--panel-border);
+}
+.watch-pager .wl-btn.ghost:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.watch-pager-info {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .feed-error-banner {

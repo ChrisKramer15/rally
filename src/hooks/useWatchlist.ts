@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react'
 import { DEFAULT_SYMBOLS, MAX_WATCHLIST, parseTickers } from '../data/stocks'
+import { syncWatchlist } from '../data/supabaseDailyStore'
 
 const STORAGE_KEY = 'rally.watchlist'
 
@@ -34,6 +35,9 @@ export function useWatchlist() {
     } catch {
       // Persistence is best-effort; in-memory state still updates.
     }
+    // Sync up to Supabase so the daily collector tracks these symbols. Fire and
+    // forget: the local save must never wait on (or fail because of) the network.
+    void syncWatchlist(capped)
   }, [])
 
   return { symbols, setSymbols: save }

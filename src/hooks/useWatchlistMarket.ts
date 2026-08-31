@@ -1,6 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { fetchQuotes, hasFinnhubKey } from '../data/finnhub'
-import { HISTORY_LEN, historyStore, type SymbolHistory } from '../data/historyStore'
+import {
+  loadCached,
+  partitionByFreshness,
+  saveSymbol,
+  usageSnapshot,
+  type UsageSnapshot,
+} from '../data/dailyCache'
+import { effectiveTradingDay } from '../data/marketCalendar'
+import type { DailyBar } from '../data/tiingo'
+import { hasSupabase } from '../data/supabaseClient'
+import {
+  fetchDailyBarsFromSupabase,
+  fetchNameFromSupabase,
+} from '../data/supabaseDailyStore'
+import { HISTORY_LEN } from '../data/historyStore'
 import { INITIAL_STOCKS, MAX_WATCHLIST, type Stock } from '../data/stocks'
 
 export type FeedStatus = 'live' | 'simulated' | 'loading' | 'error'
@@ -11,21 +24,41 @@ interface UseWatchlistMarketResult {
   lastUpdated: Date | null
   status: FeedStatus
   error: string | null
-  /** Force an immediate refresh outside the 60s cycle. */
+  /** Current month's unique-symbol budget usage (advisory). */
+  usage: UsageSnapshot
+  /** Force a refresh: re-checks freshness and reads any stale symbols. */
   refresh: () => void
 }
 
-/** Simulated fallback: nudges a seed price when no API key is configured. */
+/**
+ * Derive the app's Stock shape from a symbol's daily bars.
+ *
+ * Components consume { price, prevClose, history: number[] }, so we map:
+ *   - price     = latest session close
+ *   - prevClose = prior session close (for the % change column)
+ *   - history   = trailing closes (sparkline series), capped to HISTORY_LEN
+ */
+function barsToStock(symbol: string, name: string, bars: DailyBar[]): Stock {
+  const closes = bars.map((b) => b.close)
+  const price = closes.at(-1) ?? 0
+  const prevClose = closes.at(-2) ?? price
+  return {
+    symbol,
+    name,
+    price,
+    prevClose,
+    history: closes.slice(-HISTORY_LEN),
+  }
+}
+
+/** Simulated fallback: a stable random-walk when Supabase isn't configured. */
 function simulate(symbol: string, prev?: Stock): Stock {
   const seed = INITIAL_STOCKS.find((s) => s.symbol === symbol)
-  // Treat a non-positive prev price as "no price" (e.g. a history-only placeholder).
   const prevPrice = prev?.price && prev.price > 0 ? prev.price : undefined
   const base = prevPrice ?? seed?.price ?? 100
   const drift = (Math.random() - 0.5) * base * 0.007
   const price = Number(Math.max(base * 0.5, base + drift).toFixed(2))
-  const prevClose =
-    prev?.prevClose && prev.prevClose > 0 ? prev.prevClose : seed?.prevClose ?? base
-  // Real points only: append to prior history (empty on first tick).
+  const prevClose = prev?.prevClose && prev.prevClose > 0 ? prev.prevClose : seed?.prevClose ?? base
   const priorHistory = prev?.history ?? []
   const history = [...priorHistory.slice(-(HISTORY_LEN - 1)), price]
   return {
@@ -37,145 +70,164 @@ function simulate(symbol: string, prev?: Stock): Stock {
   }
 }
 
+/** How often to re-check freshness so the post-close rollover is picked up without a reload. */
+const FRESHNESS_CHECK_MS = 60_000
+
 /**
- * Live market data for a user-defined watchlist.
+ * Daily market data for a user-defined watchlist of US stocks & ETFs.
  *
- * Polls Finnhub every `intervalMs` (default 60s) for the given symbols. When no
- * Finnhub key is configured, it transparently falls back to a simulated feed so
- * the dashboard still works in development.
+ * Data model is DAILY bars (swing trading). The browser reads bars from
+ * SUPABASE (the `prices` table), which is CORS-safe — the server-side Edge
+ * Function collector is what pulls Tiingo and populates that table. The browser
+ * never calls Tiingo directly (Tiingo isn't CORS-enabled).
  *
- * The symbol list is capped at MAX_WATCHLIST to stay within the free-tier rate limit.
+ * The Tier 2 cache (dailyCache) still sits on top:
+ *   - cached bars render instantly on load,
+ *   - only STALE symbols (not yet holding the latest final bar) are re-read,
+ *   - repeated visits within a trading day cost ~0 reads.
+ *
+ * When Supabase isn't configured it falls back to a simulated feed so the
+ * dashboard still works in development. The symbol list is capped at
+ * MAX_WATCHLIST (Tier 1: the primary list, read first).
  */
-export function useWatchlistMarket(
-  symbols: string[],
-  intervalMs = 60_000,
-): UseWatchlistMarketResult {
+export function useWatchlistMarket(symbols: string[]): UseWatchlistMarketResult {
   const [stocks, setStocks] = useState<Stock[]>([])
   const [flash, setFlash] = useState<Record<string, 'up' | 'down'>>({})
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [status, setStatus] = useState<FeedStatus>('loading')
   const [error, setError] = useState<string | null>(null)
+  const [usage, setUsage] = useState<UsageSnapshot>(() => usageSnapshot())
 
-  // Keep the latest stocks in a ref so the poller can read history without
-  // being re-created on every data change (which would reset the interval).
   const stocksRef = useRef<Stock[]>([])
   useEffect(() => {
     stocksRef.current = stocks
   }, [stocks])
 
-  // Persisted history, hydrated from the store. The poller reads this so the
-  // first fetch after load continues the saved series instead of starting blank.
-  const hydratedRef = useRef<SymbolHistory>({})
-
   const capped = symbols.slice(0, MAX_WATCHLIST)
-  // Stable key so the effect only re-runs when the actual symbol set changes.
   const symbolsKey = capped.join(',')
 
-  // Rehydrate persisted history whenever the symbol set changes.
-  useEffect(() => {
-    let cancelled = false
-    const syms = symbolsKey ? symbolsKey.split(',') : []
-    void historyStore.load(syms).then((h) => {
-      if (!cancelled) hydratedRef.current = h
+  // Merge a batch of freshly built stocks into state, computing up/down flashes.
+  const applyStocks = useCallback((incoming: Stock[]) => {
+    setStocks((prev) => {
+      const bySym = new Map(prev.map((s) => [s.symbol, s]))
+      const nextFlash: Record<string, 'up' | 'down'> = {}
+      for (const s of incoming) {
+        const before = bySym.get(s.symbol)
+        if (before) nextFlash[s.symbol] = s.price >= before.price ? 'up' : 'down'
+        bySym.set(s.symbol, s)
+      }
+      setFlash(nextFlash)
+      // Preserve the requested symbol order.
+      const order = symbolsKey ? symbolsKey.split(',') : []
+      return order.map((sym) => bySym.get(sym)).filter((s): s is Stock => Boolean(s))
     })
-    return () => {
-      cancelled = true
-    }
+    setLastUpdated(new Date())
   }, [symbolsKey])
 
-  const applyResults = useCallback((next: Stock[], prev: Stock[]) => {
-    const prevBySym = new Map(prev.map((s) => [s.symbol, s]))
-    const nextFlash: Record<string, 'up' | 'down'> = {}
-    for (const s of next) {
-      const before = prevBySym.get(s.symbol)
-      if (before) {
-        nextFlash[s.symbol] = s.price >= before.price ? 'up' : 'down'
-      }
-    }
-    setStocks(next)
-    setFlash(nextFlash)
-    setLastUpdated(new Date())
-
-    // Persist the freshly accumulated history (store applies the rolling cap).
-    const toSave: SymbolHistory = {}
-    for (const s of next) toSave[s.symbol] = s.history
-    // Keep the in-memory hydration cache in sync for the next poll.
-    hydratedRef.current = { ...hydratedRef.current, ...toSave }
-    void historyStore.save(toSave)
-  }, [])
-
-  // Resolve the prior history for a symbol: prefer the live in-memory series,
-  // else fall back to persisted history hydrated from the store.
-  const priorHistoryFor = useCallback((symbol: string, live?: number[]): number[] => {
-    if (live && live.length > 0) return live
-    return hydratedRef.current[symbol] ?? []
-  }, [])
-
-  const poll = useCallback(async () => {
+  const refresh = useCallback(async () => {
     const syms = symbolsKey ? symbolsKey.split(',') : []
-    const prev = stocksRef.current
 
     if (syms.length === 0) {
       setStocks([])
       setFlash({})
-      setStatus(hasFinnhubKey() ? 'live' : 'simulated')
+      setStatus(hasSupabase() ? 'live' : 'simulated')
       return
     }
 
-    if (!hasFinnhubKey()) {
-      const prevBySym = new Map(prev.map((s) => [s.symbol, s]))
-      const next = syms.map((sym) => {
-        const before = prevBySym.get(sym)
-        // Ensure the simulated stock carries forward persisted history too.
-        const withHistory = before
-          ? { ...before, history: priorHistoryFor(sym, before.history) }
-          : { symbol: sym, name: sym, price: 0, prevClose: 0, history: priorHistoryFor(sym) }
-        return simulate(sym, withHistory)
-      })
-      applyResults(next, prev)
+    // 1) Render cached bars immediately (fresh or not) so the UI isn't empty.
+    const cached = loadCached(syms)
+    const cachedStocks = syms
+      .filter((sym) => cached[sym]?.bars.length)
+      .map((sym) => barsToStock(sym, cached[sym].name, cached[sym].bars))
+    if (cachedStocks.length) applyStocks(cachedStocks)
+
+    // 2) Supabase not configured -> simulated feed for anything without cache.
+    if (!hasSupabase()) {
+      const prevBySym = new Map(stocksRef.current.map((s) => [s.symbol, s]))
+      const simulated = syms.map((sym) => simulate(sym, prevBySym.get(sym)))
+      applyStocks(simulated)
       setStatus('simulated')
       return
     }
 
-    try {
-      const prevBySym = Object.fromEntries(
-        prev.map((s) => [s.symbol, s]),
-      )
-      const priorForFetch = Object.fromEntries(
-        syms.map((sym) => [
-          sym,
-          {
-            history: priorHistoryFor(sym, prevBySym[sym]?.history),
-            name: prevBySym[sym]?.name ?? sym,
-          },
-        ]),
-      )
-      const next = await fetchQuotes(syms, priorForFetch)
-      applyResults(next, prev)
+    // 3) Only re-read STALE symbols (Tier 2 dedup). Fresh ones already rendered.
+    const { stale } = partitionByFreshness(syms)
+    if (stale.length === 0) {
       setStatus('live')
       setError(null)
-    } catch (e) {
-      setStatus('error')
-      setError(e instanceof Error ? e.message : 'Failed to fetch quotes.')
+      setUsage(usageSnapshot())
+      return
     }
-  }, [symbolsKey, applyResults, priorHistoryFor])
 
+    setStatus('loading')
+    let hitError: string | null = null
+
+    // Watchlist order = read priority (Tier 1 first). Reads hit Supabase (our
+    // own DB, CORS-safe, no external rate limit), so concurrency can be higher.
+    const concurrency = 6
+    for (let i = 0; i < stale.length; i += concurrency) {
+      const batch = stale.slice(i, i + concurrency)
+      const built: Stock[] = []
+      await Promise.all(
+        batch.map(async (sym) => {
+          try {
+            const [bars, name] = await Promise.all([
+              fetchDailyBarsFromSupabase(sym),
+              resolveName(sym, cached[sym]?.name),
+            ])
+            if (bars.length === 0) return // no rows yet (collector hasn't run): skip
+            saveSymbol(sym, bars, name)
+            built.push(barsToStock(sym, name, bars))
+          } catch (e) {
+            hitError = e instanceof Error ? e.message : 'Failed to read daily bars.'
+          }
+        }),
+      )
+      if (built.length) applyStocks(built)
+      setUsage(usageSnapshot())
+    }
+
+    if (hitError) {
+      setStatus('error')
+      setError(hitError)
+    } else {
+      setStatus('live')
+      setError(null)
+    }
+  }, [symbolsKey, applyStocks])
+
+  // Initial load + refresh whenever the symbol set changes.
   useEffect(() => {
     let cancelled = false
-    // Immediate first fetch (deferred so state updates land after render),
-    // then repeat on the interval.
     const kickoff = window.setTimeout(() => {
-      if (!cancelled) void poll()
+      if (!cancelled) void refresh()
     }, 0)
-    const id = window.setInterval(() => {
-      if (!cancelled) void poll()
-    }, intervalMs)
     return () => {
       cancelled = true
       window.clearTimeout(kickoff)
-      window.clearInterval(id)
     }
-  }, [poll, intervalMs])
+  }, [refresh])
 
-  return { stocks, flash, lastUpdated, status, error, refresh: poll }
+  // Lightweight periodic freshness re-check: when the effective trading day
+  // rolls over (1 min after close), stale symbols get re-read without a reload.
+  useEffect(() => {
+    let lastDay = effectiveTradingDay()
+    const id = window.setInterval(() => {
+      const day = effectiveTradingDay()
+      if (day !== lastDay) {
+        lastDay = day
+        void refresh()
+      }
+    }, FRESHNESS_CHECK_MS)
+    return () => window.clearInterval(id)
+  }, [refresh])
+
+  return { stocks, flash, lastUpdated, status, error, usage, refresh }
+}
+
+/** Resolve a display name: prefer cached, else look it up in Supabase (best-effort). */
+async function resolveName(symbol: string, cachedName?: string): Promise<string> {
+  if (cachedName && cachedName !== symbol) return cachedName
+  const name = await fetchNameFromSupabase(symbol)
+  return name ?? symbol
 }
