@@ -6,11 +6,13 @@ import { useWatchlistMarket } from './hooks/useWatchlistMarket'
 import { IndexCard } from './components/IndexCard'
 import { Watchlist } from './components/Watchlist'
 import { WatchlistEditor } from './components/WatchlistEditor'
+import { TickerDetailModal } from './components/TickerDetailModal'
 import { Movers } from './components/Movers'
 import { DataPipeline } from './components/DataPipeline'
+import { ExplosiveMoves } from './components/ExplosiveMoves'
 import './App.css'
 
-type View = 'dashboard' | 'pipeline'
+type View = 'dashboard' | 'signals' | 'pipeline'
 
 function App() {
   const [view, setView] = useState<View>('dashboard')
@@ -23,6 +25,10 @@ function App() {
 
   // Daily watchlist data from Tiingo, cached per trading day; simulated when no key is set.
   const { stocks, flash, lastUpdated, status, error, usage } = useWatchlistMarket(symbols)
+
+  // Ticker detail modal — null means closed.
+  const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
+  const selectedStock = selectedSymbol ? stocks.find((s) => s.symbol === selectedSymbol) ?? null : null
 
   // Ticker tape is always sorted alphabetically, regardless of the watchlist's
   // own sort control.
@@ -72,6 +78,13 @@ function App() {
           </button>
           <button
             type="button"
+            className={`nav-tab ${view === 'signals' ? 'active' : ''}`}
+            onClick={() => setView('signals')}
+          >
+            Signals
+          </button>
+          <button
+            type="button"
             className={`nav-tab ${view === 'pipeline' ? 'active' : ''}`}
             onClick={() => setView('pipeline')}
           >
@@ -106,11 +119,14 @@ function App() {
             <Watchlist
               stocks={stocks}
               flash={flash}
+              onSelectSymbol={setSelectedSymbol}
               action={<WatchlistEditor symbols={symbols} onSave={setSymbols} />}
             />
             <Movers stocks={stocks} />
           </section>
         </>
+      ) : view === 'signals' ? (
+        <ExplosiveMoves stocks={stocks} status={status} />
       ) : (
         <DataPipeline />
       )}
@@ -120,6 +136,13 @@ function App() {
           Daily bars via Supabase (collected from Tiingo; US stocks &amp; ETFs). Curate symbols from your scanner. Not financial advice.
         </span>
       </footer>
+
+      {selectedStock && (
+        <TickerDetailModal
+          stock={selectedStock}
+          onClose={() => setSelectedSymbol(null)}
+        />
+      )}
     </div>
   )
 }

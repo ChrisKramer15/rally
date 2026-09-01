@@ -7,6 +7,8 @@ interface WatchlistProps {
   flash: Record<string, 'up' | 'down'>
   /** Optional action rendered in the panel header, e.g. the paste-tickers button. */
   action?: ReactNode
+  /** Called when the user clicks a ticker row to open the detail modal. */
+  onSelectSymbol?: (symbol: string) => void
 }
 
 const PAGE_SIZE = 10
@@ -19,7 +21,7 @@ const SORT_OPTIONS: { key: SortKey; label: string }[] = [
   { key: 'alpha', label: 'A–Z' },
 ]
 
-export function Watchlist({ stocks, flash, action }: WatchlistProps) {
+export function Watchlist({ stocks, flash, action, onSelectSymbol }: WatchlistProps) {
   const [page, setPage] = useState(0)
   const [sortKey, setSortKey] = useState<SortKey>('change')
 
@@ -90,7 +92,15 @@ export function Watchlist({ stocks, flash, action }: WatchlistProps) {
           const pct = changePct(s.price, s.prevClose)
           const positive = pct >= 0
           return (
-            <li key={s.symbol} className={`watch-row ${flash[s.symbol] ? `flash-${flash[s.symbol]}` : ''}`}>
+            <li
+              key={s.symbol}
+              className={`watch-row watch-row-clickable ${flash[s.symbol] ? `flash-${flash[s.symbol]}` : ''}`}
+              onClick={() => onSelectSymbol?.(s.symbol)}
+              role={onSelectSymbol ? 'button' : undefined}
+              tabIndex={onSelectSymbol ? 0 : undefined}
+              onKeyDown={onSelectSymbol ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectSymbol(s.symbol) } } : undefined}
+              aria-label={onSelectSymbol ? `View details for ${s.symbol}` : undefined}
+            >
               <span className="watch-sym">
                 <span className="sym">{s.symbol}</span>
                 <span className="name">{s.name}</span>

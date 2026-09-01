@@ -14,6 +14,7 @@
   --neon-green: #29ffb0;
   --neon-red: #ff4d6d;
   --neon-pink: #ff3df2;
+  --neon-orange: #ff8c00;
 
   --accent: var(--neon-purple);
   --glow: 0 0 18px rgba(177, 77, 255, 0.45);
