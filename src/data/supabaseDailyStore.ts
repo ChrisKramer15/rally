@@ -53,33 +53,103 @@ export async function fetchDailyBarsFromSupabase(symbol: string): Promise<DailyB
   return bars
 }
 
+/** A watchlist entry as stored in Supabase (browser-visible columns). */
+export interface WatchlistEntry {
+  symbol: string
+  name?: string
+}
+
 /**
- * Sync watchlist symbols up to Supabase so the daily collector tracks them.
+ * Read the ACTIVE watchlist from Supabase — the shared source of truth every
+ * device converges on. Returns entries oldest-added first so the list order is
+ * stable across devices. Returns [] when unconfigured or on error (callers fall
+ * back to their local list).
+ */
+export async function fetchWatchlist(): Promise<WatchlistEntry[]> {
+  const supabase = getSupabase()
+  if (!supabase) return []
+
+  const { data, error } = await supabase
+    .from('watchlist')
+    .select('symbol,name')
+    .eq('active', true)
+    .order('added_at', { ascending: true })
+
+  if (error) {
+    console.warn(`Watchlist read skipped: ${error.message}`)
+    return []
+  }
+  return (data ?? []).map((r) => {
+    const row = r as { symbol: string; name: string | null }
+    return { symbol: row.symbol, name: row.name ?? undefined }
+  })
+}
+
+/**
+ * Reconcile the shared watchlist so the collector only pulls symbols that are
+ * CURRENTLY on the user's list.
  *
- * Inserts any new symbols into `public.watchlist` (existing ones are ignored via
- * onConflict). Best-effort and non-blocking: a failure here must never break the
- * local watchlist save. No-op when Supabase is unconfigured.
+ * Two-way sync against `public.watchlist`:
+ *   1. Upsert every current symbol with active=true — inserts new tickers and
+ *      REACTIVATES any that were previously removed (a returning symbol keeps
+ *      its row, added_at, and price history).
+ *   2. Deactivate (active=false) any rows that are active in the table but no
+ *      longer in the current list — a soft delete that stops the collector from
+ *      pulling them without discarding their history.
+ *
+ * Best-effort and non-blocking: a failure here must never break the local
+ * watchlist save. No-op when Supabase is unconfigured.
  *
  * Returns the symbols that were newly inserted (useful for kicking an immediate
  * collect), or [] when nothing was added / Supabase is off.
  */
 export async function syncWatchlist(symbols: string[]): Promise<string[]> {
   const supabase = getSupabase()
-  if (!supabase || symbols.length === 0) return []
+  if (!supabase) return []
 
-  const rows = symbols.map((symbol) => ({ symbol }))
-  // ignoreDuplicates: don't touch existing rows (preserve added_at/name/active).
-  const { data, error } = await supabase
-    .from('watchlist')
-    .upsert(rows, { onConflict: 'symbol', ignoreDuplicates: true })
-    .select('symbol')
+  const wanted = new Set(symbols)
 
-  if (error) {
-    // Advisory only — surface in console but don't throw into the save path.
-    console.warn(`Watchlist sync skipped: ${error.message}`)
-    return []
+  // 1) Upsert current symbols as active. onConflict updates the active flag so a
+  //    previously-removed symbol is reactivated; new symbols are inserted.
+  let inserted: string[] = []
+  if (symbols.length > 0) {
+    const rows = symbols.map((symbol) => ({ symbol, active: true }))
+    const { data, error } = await supabase
+      .from('watchlist')
+      .upsert(rows, { onConflict: 'symbol' })
+      .select('symbol')
+    if (error) {
+      // Advisory only — surface in console but don't throw into the save path.
+      console.warn(`Watchlist sync (activate) skipped: ${error.message}`)
+    } else {
+      inserted = (data ?? []).map((r) => (r as { symbol: string }).symbol)
+    }
   }
-  return (data ?? []).map((r) => (r as { symbol: string }).symbol)
+
+  // 2) Deactivate anything still active in the table but no longer wanted.
+  const { data: activeRows, error: readErr } = await supabase
+    .from('watchlist')
+    .select('symbol')
+    .eq('active', true)
+  if (readErr) {
+    console.warn(`Watchlist sync (read active) skipped: ${readErr.message}`)
+    return inserted
+  }
+  const toDeactivate = (activeRows ?? [])
+    .map((r) => (r as { symbol: string }).symbol)
+    .filter((sym) => !wanted.has(sym))
+
+  if (toDeactivate.length > 0) {
+    const { error: deErr } = await supabase
+      .from('watchlist')
+      .update({ active: false })
+      .in('symbol', toDeactivate)
+    if (deErr) {
+      console.warn(`Watchlist sync (deactivate) skipped: ${deErr.message}`)
+    }
+  }
+
+  return inserted
 }
 
 /**

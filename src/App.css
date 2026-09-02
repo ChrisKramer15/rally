@@ -1774,31 +1774,23 @@
 }
 
 @media (max-width: 640px) {
-  /* Phone: show ALL 10 columns for every signal. The table can't fit that
-     width on a phone, so instead of hiding columns we let the panel scroll
-     horizontally and give the rows a min-width so each column stays readable.
-     Both the header row and the list share the same min-width so they stay
-     aligned while scrolling. */
-  .em-table-panel {
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-  }
+  /* Phone: keep only Symbol | Grade | Bar | Price | Move | Date (6 columns).
+     The visible-child count MUST match the track count or grid auto-placement
+     spills extra cells into new rows and they overlap. Hide Body(6) ATR(7)
+     Vol(8) Gap(9); Date(10) stays. */
   .em-row {
-    /* Restore the full 10-track grid — the wider (1100px/900px) breakpoints
-       above still cascade at this width and would otherwise leave hidden
-       columns and a mismatched track count. */
-    grid-template-columns: 2fr 110px 24px 1fr 1fr 0.8fr 0.8fr 0.8fr 0.8fr 1fr;
-    min-width: 720px;
+    grid-template-columns: 1.6fr 92px 20px 1fr 1fr 0.9fr;
     gap: 8px;
-    padding-left: 16px;
-    padding-right: 16px;
   }
-  /* Re-show the Gap (9) and Date (10) columns hidden at wider breakpoints. */
+  .em-row > :nth-child(6),
+  .em-row > :nth-child(7),
+  .em-row > :nth-child(8),
   .em-row > :nth-child(9),
-  .em-row > :nth-child(10),
-  .em-row-head > :nth-child(9),
-  .em-row-head > :nth-child(10) {
-    display: block;
+  .em-row-head > :nth-child(6),
+  .em-row-head > :nth-child(7),
+  .em-row-head > :nth-child(8),
+  .em-row-head > :nth-child(9) {
+    display: none;
   }
   .em-header {
     flex-direction: column;
