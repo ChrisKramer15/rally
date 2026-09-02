@@ -29,30 +29,38 @@ function OpenPositionRow({
   stocks: Stock[]
   onClose: (id: string) => void
 }) {
+  const isShort = position.side === 'short'
   const entryPrice = position.entryPrice ?? 0
   const livePrice = currentPriceFor(position.symbol, stocks)
   const tradeCost = entryPrice * position.shares
   // Fall back to entry price when we have no live quote (mark-to-cost).
   const markPrice = livePrice ?? entryPrice
   const currentCost = markPrice * position.shares
-  const pnl = currentCost - tradeCost
+  // P/L direction flips for shorts: profit when price falls below entry.
+  const pnl = isShort ? (entryPrice - markPrice) * position.shares : currentCost - tradeCost
   const pnlPct = tradeCost > 0 ? (pnl / tradeCost) * 100 : 0
   const up = pnl >= 0
 
-  // Flag when price has crossed a managed level.
-  const hitStop = livePrice !== null && livePrice <= position.stopLossPrice
-  const hitTarget = livePrice !== null && livePrice >= position.cashOutPrice
+  // Flag when price has crossed a managed level. For a short the stop is above
+  // and the target below entry, so the comparisons invert.
+  const hitStop = livePrice !== null && (isShort ? livePrice >= position.stopLossPrice : livePrice <= position.stopLossPrice)
+  const hitTarget = livePrice !== null && (isShort ? livePrice <= position.cashOutPrice : livePrice >= position.cashOutPrice)
 
   return (
     <li className="bt-row">
       <div className="bt-col-date">{position.openedDate ?? '—'}</div>
 
       <div className="bt-col-sym">
-        <span className="bt-sym">{position.symbol}</span>
+        <span className="bt-sym">
+          {position.symbol}
+          <span className={`bt-side-badge ${isShort ? 'bt-side-short' : 'bt-side-long'}`}>
+            {isShort ? 'SHORT' : 'LONG'}
+          </span>
+        </span>
         {position.name && position.name !== position.symbol && (
           <span className="bt-name">{position.name}</span>
         )}
-        <span className="bt-shares">{position.shares} sh · {position.orderType}</span>
+        <span className="bt-shares">{position.shares} sh · {position.orderType} · {position.riskReward}:1</span>
       </div>
 
       <div className="bt-col-num">
@@ -102,23 +110,29 @@ function PendingOrderRow({
   stocks: Stock[]
   onCancel: (id: string) => void
 }) {
+  const isShort = position.side === 'short'
   const limit = position.limitPrice ?? 0
   const livePrice = currentPriceFor(position.symbol, stocks)
   const reserved = limit * position.shares
   // Distance the live price still has to travel to trigger the fill.
   const distancePct = livePrice && limit > 0 ? ((livePrice - limit) / limit) * 100 : null
-  const dir = position.zoneKind === 'supply' ? 'rises to' : 'drops to'
+  const dir = isShort ? 'rises to' : 'drops to'
 
   return (
     <li className="bt-row bt-row-pending">
       <div className="bt-col-date">{position.placedDate}</div>
 
       <div className="bt-col-sym">
-        <span className="bt-sym">{position.symbol}</span>
+        <span className="bt-sym">
+          {position.symbol}
+          <span className={`bt-side-badge ${isShort ? 'bt-side-short' : 'bt-side-long'}`}>
+            {isShort ? 'SHORT' : 'LONG'}
+          </span>
+        </span>
         {position.name && position.name !== position.symbol && (
           <span className="bt-name">{position.name}</span>
         )}
-        <span className="bt-shares">{position.shares} sh · limit</span>
+        <span className="bt-shares">{position.shares} sh · limit · {position.riskReward}:1</span>
       </div>
 
       <div className="bt-col-num">
@@ -173,6 +187,7 @@ export function Backtest({ stocks, portfolio }: BacktestProps) {
     let invested = 0
     let marketValue = 0
     let reserved = 0
+    let openPnl = 0
     for (const p of positions) {
       if (p.status === 'pending') {
         reserved += (p.limitPrice ?? 0) * p.shares
@@ -183,8 +198,10 @@ export function Backtest({ stocks, portfolio }: BacktestProps) {
       const mark = currentPriceFor(p.symbol, stocks) ?? entry
       invested += tradeCost
       marketValue += mark * p.shares
+      // Short P/L is inverted: profit when the mark falls below entry.
+      openPnl += p.side === 'short' ? (entry - mark) * p.shares : (mark - entry) * p.shares
     }
-    return { invested, marketValue, openPnl: marketValue - invested, reserved }
+    return { invested, marketValue, openPnl, reserved }
   }, [positions, stocks])
 
   const cash = budget - invested

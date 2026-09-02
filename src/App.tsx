@@ -14,8 +14,27 @@ import { Movers } from './components/Movers'
 import { DataPipeline } from './components/DataPipeline'
 import { ExplosiveMoves } from './components/ExplosiveMoves'
 import { Backtest } from './components/Backtest'
-import { useBacktestPortfolio, type ZoneKind } from './hooks/useBacktestPortfolio'
+import { useBacktestPortfolio, type TradeSide } from './hooks/useBacktestPortfolio'
+import type { DailyBar } from './data/tiingo'
 import './App.css'
+
+/**
+ * Wilder-style ATR over the last `period` bars. Used to size the stop buffer
+ * beyond the distal line when placing a trade. Returns undefined without enough
+ * history.
+ */
+function atrFromBars(bars: DailyBar[], period = 14): number | undefined {
+  if (bars.length < period + 1) return undefined
+  const recent = bars.slice(-(period + 1))
+  let sum = 0
+  for (let i = 1; i < recent.length; i++) {
+    const b = recent[i]
+    const prev = recent[i - 1]
+    const tr = Math.max(b.high - b.low, Math.abs(b.high - prev.close), Math.abs(b.low - prev.close))
+    sum += tr
+  }
+  return sum / period
+}
 
 type View = 'dashboard' | 'signals' | 'backtest' | 'pipeline'
 
@@ -48,16 +67,27 @@ function App() {
     setTradeSymbol(symbol)
   }
 
-  // The proximal line + zone side for the symbol being traded, from its most
-  // recent basing zone. Used to seed the limit-order price. Computed from the
-  // local daily-bar cache (same source the zones hook uses).
-  const tradeZone = useMemo<{ proximal: number; kind: ZoneKind } | null>(() => {
+  // Zone context for the symbol being traded, from its most recent basing zone:
+  //   • proximal → seeds the limit-order price (the entry line)
+  //   • distal   → anchors the stop just beyond the zone's far edge
+  //   • atr      → sizes the stop buffer beyond the distal line
+  // Computed from the local daily-bar cache (same source the zones hook uses).
+  //   • kind     → the signal's direction: a demand zone (explosive up move)
+  //                defaults the ticket to Long; a supply zone (down move) to
+  //                Short. The user can still override in the ticket.
+  const tradeZone = useMemo<{ proximal: number; distal: number; atr?: number; side: TradeSide } | null>(() => {
     if (!tradeSymbol) return null
     const cached = loadCached([tradeSymbol])[tradeSymbol]
     if (!cached || cached.bars.length === 0) return null
     const zones = detectBasesForBars(cached.bars, tradeSymbol)
     const latest = zones[zones.length - 1]
-    return latest ? { proximal: latest.proximal, kind: latest.kind } : null
+    if (!latest) return null
+    return {
+      proximal: latest.proximal,
+      distal: latest.distal,
+      atr: atrFromBars(cached.bars),
+      side: latest.kind === 'supply' ? 'short' : 'long',
+    }
   }, [tradeSymbol])
 
   // Place the order from the ticket, then jump to the Backtest page.
@@ -67,17 +97,18 @@ function App() {
       symbol: tradeStock.symbol,
       name: tradeStock.name,
       price: tradeStock.price,
+      side: ticket.side,
       shares: ticket.shares,
       orderType: ticket.orderType,
       limitPrice: ticket.limitPrice,
-      zoneKind: ticket.zoneKind,
+      distal: tradeZone?.distal,
+      atr: tradeZone?.atr,
+      riskReward: ticket.riskReward,
     })
     setTradeSymbol(null)
     setView('backtest')
   }
 
-  // Pending-order watcher: whenever live prices update, try to fill any resting
-  // limit orders whose proximal line has been touched.
   // Pending-order watcher: on each feed refresh, test each resting limit order
   // against its symbol's latest daily bar low/high, so a fill triggers when the
   // session traded *through* the proximal line (intraday touch), not only when
@@ -239,7 +270,9 @@ function App() {
           price={tradeStock.price}
           budget={portfolio.budget}
           proximal={tradeZone?.proximal ?? null}
-          zoneKind={tradeZone?.kind ?? null}
+          distal={tradeZone?.distal ?? null}
+          atr={tradeZone?.atr ?? null}
+          defaultSide={tradeZone?.side ?? 'long'}
           onSubmit={handleSubmitTicket}
           onClose={() => setTradeSymbol(null)}
         />

@@ -7,20 +7,28 @@ import { useCallback, useEffect, useState } from 'react'
  * State is persisted to localStorage so positions survive reloads. There's no
  * network/broker here — it's a simulation the user drives from the Trade button.
  *
+ * Sides:
+ *   • long  — profit when price rises. Stop below entry, target above.
+ *   • short — profit when price falls. Stop above entry, target below.
+ *
  * Order types:
  *   • market — fills immediately at the current price (status 'open').
  *   • limit  — a resting order at a target price (status 'pending'). It fills
- *              when the live price reaches the limit; for a demand zone that's
- *              price dipping to/below the limit, for a supply zone price rising
- *              to/above it. On fill the position flips to 'open' at the limit
- *              price and its managed levels are (re)derived from that fill.
+ *              when the session trades through the limit: a long fills when the
+ *              day's LOW ≤ limit (buying the dip into demand); a short fills
+ *              when the day's HIGH ≥ limit (selling the rally into supply). On
+ *              fill the position flips to 'open' at the limit price and its
+ *              managed levels are (re)derived from that fill.
  *
- * From the entry (fill) price we derive two managed levels:
- *   • stop-loss   — entry × (1 − stopLossPct)      (risk floor)
- *   • cash-out    — entry × (1 + stopLossPct × RR) (profit target)
- *
- * "Trade cost"    = entry price × shares       (what the position cost to open)
- * "Current cost"  = live price × shares        (what it's worth right now)
+ * Managed levels (supply/demand convention):
+ *   • stop-loss — anchored just beyond the DISTAL line (the zone's far edge):
+ *                 long  → distal − 0.1×ATR   (below the demand base low)
+ *                 short → distal + 0.1×ATR   (above the supply base high)
+ *                 When no zone/distal is available, falls back to a flat % of
+ *                 entry (DEFAULT_STOP_LOSS_PCT).
+ *   • cash-out  — a reward target measured from the ACTUAL risk to the stop:
+ *                 risk = |entry − stop|;  target = entry ± risk × riskReward.
+ *                 riskReward is the user-chosen R:R (2 = 2:1, 3 = 3:1, …).
  */
 
 const STORAGE_KEY = 'rally.backtest.v1'
@@ -28,15 +36,16 @@ const STORAGE_KEY = 'rally.backtest.v1'
 /** Default starting portfolio budget. */
 export const DEFAULT_BUDGET = 25_000
 
-/** Default stop-loss distance below entry (8%). */
+/** Stop-loss fallback distance from entry when no distal line is known (8%). */
 const DEFAULT_STOP_LOSS_PCT = 0.08
-/** Default reward-to-risk multiple used to derive the cash-out target (2R). */
-const DEFAULT_RISK_REWARD = 2
+/** Default reward-to-risk multiple when the caller doesn't specify one (2:1). */
+export const DEFAULT_RISK_REWARD = 2
+/** Buffer beyond the distal line for the stop, in ATR units. */
+const DISTAL_STOP_ATR_BUFFER = 0.1
 
 export type OrderType = 'market' | 'limit'
 export type PositionStatus = 'open' | 'pending'
-/** Which side of the market a resting limit order waits on. */
-export type ZoneKind = 'demand' | 'supply'
+export type TradeSide = 'long' | 'short'
 
 export interface BacktestPosition {
   /** Stable id for React keys / removal. */
@@ -45,6 +54,8 @@ export interface BacktestPosition {
   symbol: string
   /** Company name, if known. */
   name?: string
+  /** Long (buy) or short (sell). Drives stop/target direction + fill trigger. */
+  side: TradeSide
   /** 'open' = filled and live; 'pending' = a resting limit order not yet hit. */
   status: PositionStatus
   /** How the order was placed. */
@@ -61,13 +72,17 @@ export interface BacktestPosition {
    */
   limitPrice?: number
   /**
-   * For a pending limit order: the side of the zone, which decides the trigger
-   * direction. 'demand' fills when price ≤ limit; 'supply' when price ≥ limit.
+   * The zone's distal line, captured at order time. Used to anchor the stop
+   * just beyond it. Undefined when the symbol had no detected zone.
    */
-  zoneKind?: ZoneKind
+  distalPrice?: number
+  /** ATR at order time, for sizing the stop buffer beyond the distal line. */
+  atr?: number
+  /** User-chosen reward-to-risk multiple (2 = 2:1). */
+  riskReward: number
   /** Number of shares. */
   shares: number
-  /** Stop-loss price (risk floor). Derived on fill. */
+  /** Stop-loss price (risk floor/ceiling). Derived on fill. */
   stopLossPrice: number
   /** Cash-out / target price (profit take). Derived on fill. */
   cashOutPrice: number
@@ -96,21 +111,24 @@ function loadState(): PersistShape {
 }
 
 /**
- * Backfill fields for positions saved by earlier versions (which had no status,
- * orderType, placedDate, or nullable entry/openedDate). Treats them as filled
- * market orders.
+ * Backfill fields for positions saved by earlier versions (no side/status/
+ * orderType/riskReward). Treats them as filled long market orders.
  */
-function migratePosition(p: BacktestPosition & { openedDate?: string | null }): BacktestPosition {
-  if (p.status && p.orderType) return p
-  const legacyOpened = typeof p.openedDate === 'string' ? p.openedDate : todayISO()
-  return {
-    ...p,
-    status: 'open',
-    orderType: 'market',
-    placedDate: legacyOpened,
-    openedDate: legacyOpened,
-    entryPrice: p.entryPrice ?? 0,
+function migratePosition(
+  p: BacktestPosition & { openedDate?: string | null; zoneKind?: string },
+): BacktestPosition {
+  const migrated: BacktestPosition = { ...p }
+  if (!migrated.side) migrated.side = 'long'
+  if (!migrated.riskReward) migrated.riskReward = DEFAULT_RISK_REWARD
+  if (!migrated.status || !migrated.orderType) {
+    const legacyOpened = typeof p.openedDate === 'string' ? p.openedDate : todayISO()
+    migrated.status = 'open'
+    migrated.orderType = 'market'
+    migrated.placedDate = legacyOpened
+    migrated.openedDate = legacyOpened
+    migrated.entryPrice = p.entryPrice ?? 0
   }
+  return migrated
 }
 
 function persist(state: PersistShape): void {
@@ -129,12 +147,44 @@ function todayISO(): string {
   return new Date().toISOString().slice(0, 10)
 }
 
-/** Derive stop-loss + cash-out levels from a fill price. */
-function managedLevels(entry: number, stopLossPct: number, riskReward: number) {
-  return {
-    stopLossPrice: entry * (1 - stopLossPct),
-    cashOutPrice: entry * (1 + stopLossPct * riskReward),
+/**
+ * Derive stop-loss + cash-out from a fill price, honoring side, the distal line,
+ * ATR, and the chosen reward-to-risk ratio.
+ *
+ * Stop: anchored just beyond the distal line when we have one that sits on the
+ * correct (protective) side of entry — below entry for a long, above for a
+ * short. Otherwise falls back to a flat % of entry. Target: entry moved by the
+ * risk distance × riskReward in the profit direction.
+ */
+function managedLevels(
+  side: TradeSide,
+  entry: number,
+  opts: { distal?: number; atr?: number; riskReward: number },
+): { stopLossPrice: number; cashOutPrice: number } {
+  const { distal, atr, riskReward } = opts
+  const buffer = atr && atr > 0 ? atr * DISTAL_STOP_ATR_BUFFER : 0
+
+  let stopLossPrice: number
+  if (side === 'long') {
+    // Stop wants to be below entry. Use the distal line if it's below entry.
+    if (distal !== undefined && distal < entry) {
+      stopLossPrice = distal - buffer
+    } else {
+      stopLossPrice = entry * (1 - DEFAULT_STOP_LOSS_PCT)
+    }
+    stopLossPrice = Math.max(0, stopLossPrice)
+    const risk = entry - stopLossPrice
+    return { stopLossPrice, cashOutPrice: entry + risk * riskReward }
   }
+
+  // Short: stop wants to be above entry. Use the distal line if it's above entry.
+  if (distal !== undefined && distal > entry) {
+    stopLossPrice = distal + buffer
+  } else {
+    stopLossPrice = entry * (1 + DEFAULT_STOP_LOSS_PCT)
+  }
+  const risk = stopLossPrice - entry
+  return { stopLossPrice, cashOutPrice: Math.max(0, entry - risk * riskReward) }
 }
 
 export interface OpenTradeInput {
@@ -144,15 +194,17 @@ export interface OpenTradeInput {
   price: number
   /** Number of shares to trade. */
   shares: number
+  /** Long (buy) or short (sell). */
+  side: TradeSide
   /** 'market' fills now; 'limit' rests until price hits limitPrice. */
   orderType: OrderType
   /** Required for limit orders: the price the order waits for (proximal line). */
   limitPrice?: number
-  /** For limit orders: which side of the zone drives the trigger direction. */
-  zoneKind?: ZoneKind
-  /** Optional stop-loss distance below entry (fraction, e.g. 0.08 = 8%). */
-  stopLossPct?: number
-  /** Optional reward-to-risk multiple for the cash-out target. */
+  /** The zone's distal line, for anchoring the stop just beyond it. */
+  distal?: number
+  /** ATR at order time, for the distal-stop buffer. */
+  atr?: number
+  /** Reward-to-risk multiple the user chose (2 = 2:1). */
   riskReward?: number
 }
 
@@ -182,25 +234,31 @@ export function useBacktestPortfolio() {
         return s
       }
       const shares = Math.max(1, Math.floor(input.shares))
-      const stopLossPct = input.stopLossPct ?? DEFAULT_STOP_LOSS_PCT
       const riskReward = input.riskReward ?? DEFAULT_RISK_REWARD
       const today = todayISO()
 
       if (input.orderType === 'limit') {
         const limitPrice = input.limitPrice
         if (!Number.isFinite(limitPrice) || (limitPrice as number) <= 0) return s
-        const levels = managedLevels(limitPrice as number, stopLossPct, riskReward)
+        const levels = managedLevels(input.side, limitPrice as number, {
+          distal: input.distal,
+          atr: input.atr,
+          riskReward,
+        })
         const position: BacktestPosition = {
           id: makeId(),
           symbol: input.symbol,
           name: input.name,
+          side: input.side,
           status: 'pending',
           orderType: 'limit',
           placedDate: today,
           openedDate: null,
           entryPrice: null,
           limitPrice: limitPrice as number,
-          zoneKind: input.zoneKind ?? 'demand',
+          distalPrice: input.distal,
+          atr: input.atr,
+          riskReward,
           shares,
           ...levels,
         }
@@ -211,16 +269,24 @@ export function useBacktestPortfolio() {
       // Market order — fill now at the current price.
       const price = input.price
       if (!Number.isFinite(price) || price <= 0) return s
-      const levels = managedLevels(price, stopLossPct, riskReward)
+      const levels = managedLevels(input.side, price, {
+        distal: input.distal,
+        atr: input.atr,
+        riskReward,
+      })
       const position: BacktestPosition = {
         id: makeId(),
         symbol: input.symbol,
         name: input.name,
+        side: input.side,
         status: 'open',
         orderType: 'market',
         placedDate: today,
         openedDate: today,
         entryPrice: price,
+        distalPrice: input.distal,
+        atr: input.atr,
+        riskReward,
         shares,
         ...levels,
       }
@@ -235,10 +301,10 @@ export function useBacktestPortfolio() {
    * map of symbol → the latest daily bar's low/high range. The fill tests the
    * intraday extreme (not just the close), so an order fills the moment price
    * *traded through* the limit during the session:
-   *   • demand — fills when the day's LOW ≤ limit (price dipped to the line)
-   *   • supply — fills when the day's HIGH ≥ limit (price rose to the line)
+   *   • long  — fills when the day's LOW ≤ limit (price dipped to the line)
+   *   • short — fills when the day's HIGH ≥ limit (price rose to the line)
    * Filled orders flip to 'open' at the limit price with freshly derived
-   * stop-loss / cash-out levels.
+   * stop-loss / cash-out levels (anchored to the stored distal line + ATR).
    *
    * Called by the app as live data updates. It's a no-op (returns the same
    * state reference) when nothing fills, so it won't cause needless re-renders.
@@ -250,12 +316,16 @@ export function useBacktestPortfolio() {
         if (p.status !== 'pending' || p.limitPrice === undefined) return p
         const range = rangeBySymbol.get(p.symbol)
         if (!range || !Number.isFinite(range.low) || !Number.isFinite(range.high)) return p
-        const triggered = p.zoneKind === 'supply'
+        const triggered = p.side === 'short'
           ? range.high >= p.limitPrice
           : range.low <= p.limitPrice
         if (!triggered) return p
         changed = true
-        const levels = managedLevels(p.limitPrice, DEFAULT_STOP_LOSS_PCT, DEFAULT_RISK_REWARD)
+        const levels = managedLevels(p.side, p.limitPrice, {
+          distal: p.distalPrice,
+          atr: p.atr,
+          riskReward: p.riskReward,
+        })
         return {
           ...p,
           status: 'open' as const,

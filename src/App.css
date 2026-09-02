@@ -2357,3 +2357,83 @@
   font-size: 13px;
   color: var(--neon-cyan);
 }
+
+/* ---------- Trade ticket: side + levels ---------- */
+/* Long/Short side buttons tint when active so direction is obvious. */
+.tt-seg-btn.tt-side-long.active {
+  background: var(--neon-green);
+  box-shadow: 0 0 12px rgba(41, 255, 176, 0.5);
+}
+.tt-seg-btn.tt-side-short.active {
+  background: var(--neon-red);
+  box-shadow: 0 0 12px rgba(255, 77, 109, 0.5);
+}
+
+/* Level preview (stop / cash-out) */
+.tt-levels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.tt-level {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+}
+
+.tt-level-label {
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+}
+
+.tt-level-val {
+  font-family: var(--mono);
+  font-size: 17px;
+  font-weight: 600;
+}
+.tt-level-stop { color: var(--neon-red); }
+.tt-level-target { color: var(--neon-green); }
+
+.tt-level-note {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* Short submit button reads red rather than the default purple. */
+.wl-btn.primary.tt-submit-short {
+  background: var(--neon-red);
+  border-color: var(--neon-red);
+}
+
+/* ---------- Backtest: side badge ---------- */
+.bt-side-badge {
+  display: inline-block;
+  margin-left: 8px;
+  font-family: var(--sans);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  vertical-align: middle;
+}
+.bt-side-long {
+  color: var(--neon-green);
+  background: rgba(41, 255, 176, 0.12);
+  border: 1px solid rgba(41, 255, 176, 0.3);
+}
+.bt-side-short {
+  color: var(--neon-red);
+  background: rgba(255, 77, 109, 0.12);
+  border: 1px solid rgba(255, 77, 109, 0.3);
+}
