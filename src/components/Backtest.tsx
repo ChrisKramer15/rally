@@ -5,6 +5,7 @@ import {
   type BacktestPosition,
   type useBacktestPortfolio,
 } from '../hooks/useBacktestPortfolio'
+import { TradeDetailModal } from './TradeDetailModal'
 
 type Portfolio = ReturnType<typeof useBacktestPortfolio>
 
@@ -24,10 +25,12 @@ function OpenPositionRow({
   position,
   stocks,
   onClose,
+  onSelect,
 }: {
   position: BacktestPosition
   stocks: Stock[]
   onClose: (id: string) => void
+  onSelect: (position: BacktestPosition) => void
 }) {
   const isShort = position.side === 'short'
   const entryPrice = position.entryPrice ?? 0
@@ -47,7 +50,14 @@ function OpenPositionRow({
   const hitTarget = livePrice !== null && (isShort ? livePrice <= position.cashOutPrice : livePrice >= position.cashOutPrice)
 
   return (
-    <li className="bt-row">
+    <li
+      className="bt-row bt-row-clickable"
+      onClick={() => onSelect(position)}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(position) } }}
+      title={`View ${position.symbol} chart with trade levels`}
+    >
       <div className="bt-col-date">{position.openedDate ?? '—'}</div>
 
       <div className="bt-col-sym">
@@ -90,7 +100,7 @@ function OpenPositionRow({
       <div className="bt-col-action">
         <button
           className="bt-close-btn"
-          onClick={() => onClose(position.id)}
+          onClick={(e) => { e.stopPropagation(); onClose(position.id) }}
           aria-label={`Close ${position.symbol} position`}
           title="Close position"
         >
@@ -105,10 +115,12 @@ function PendingOrderRow({
   position,
   stocks,
   onCancel,
+  onSelect,
 }: {
   position: BacktestPosition
   stocks: Stock[]
   onCancel: (id: string) => void
+  onSelect: (position: BacktestPosition) => void
 }) {
   const isShort = position.side === 'short'
   const limit = position.limitPrice ?? 0
@@ -119,7 +131,14 @@ function PendingOrderRow({
   const dir = isShort ? 'rises to' : 'drops to'
 
   return (
-    <li className="bt-row bt-row-pending">
+    <li
+      className="bt-row bt-row-pending bt-row-clickable"
+      onClick={() => onSelect(position)}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(position) } }}
+      title={`View ${position.symbol} chart with trade levels`}
+    >
       <div className="bt-col-date">{position.placedDate}</div>
 
       <div className="bt-col-sym">
@@ -159,7 +178,7 @@ function PendingOrderRow({
       <div className="bt-col-action">
         <button
           className="bt-close-btn"
-          onClick={() => onCancel(position.id)}
+          onClick={(e) => { e.stopPropagation(); onCancel(position.id) }}
           aria-label={`Cancel ${position.symbol} pending order`}
           title="Cancel pending order"
         >
@@ -173,6 +192,15 @@ function PendingOrderRow({
 export function Backtest({ stocks, portfolio }: BacktestProps) {
   const { budget, positions, setBudget, closePosition, resetPortfolio } = portfolio
   const [budgetDraft, setBudgetDraft] = useState<string>(String(budget))
+  // Id of the position whose chart/level detail modal is open (null = closed).
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+
+  // Resolve the live selected position from the current positions list so it
+  // stays in sync if the underlying data changes (e.g. a pending order fills).
+  const selectedPosition = useMemo(
+    () => (selectedId ? positions.find((p) => p.id === selectedId) ?? null : null),
+    [selectedId, positions],
+  )
 
   const commitBudget = () => {
     const parsed = Number(budgetDraft.replace(/[^0-9.]/g, ''))
@@ -280,7 +308,13 @@ export function Backtest({ stocks, portfolio }: BacktestProps) {
 
           <ul className="bt-list" aria-label="Pending orders">
             {pendingOrders.map((p) => (
-              <PendingOrderRow key={p.id} position={p} stocks={stocks} onCancel={closePosition} />
+              <PendingOrderRow
+                key={p.id}
+                position={p}
+                stocks={stocks}
+                onCancel={closePosition}
+                onSelect={(pos) => setSelectedId(pos.id)}
+              />
             ))}
           </ul>
         </div>
@@ -318,7 +352,13 @@ export function Backtest({ stocks, portfolio }: BacktestProps) {
         ) : (
           <ul className="bt-list" aria-label="Open positions">
             {openPositions.map((p) => (
-              <OpenPositionRow key={p.id} position={p} stocks={stocks} onClose={closePosition} />
+              <OpenPositionRow
+                key={p.id}
+                position={p}
+                stocks={stocks}
+                onClose={closePosition}
+                onSelect={(pos) => setSelectedId(pos.id)}
+              />
             ))}
           </ul>
         )}
@@ -328,6 +368,15 @@ export function Backtest({ stocks, portfolio }: BacktestProps) {
         Starting budget defaults to ${formatCurrency(DEFAULT_BUDGET)}. Stop-loss is set 8% below the
         fill price and the cash-out target at 2× that risk. Simulation only — not financial advice.
       </div>
+
+      {selectedPosition && (
+        <TradeDetailModal
+          key={selectedPosition.id}
+          position={selectedPosition}
+          livePrice={currentPriceFor(selectedPosition.symbol, stocks)}
+          onClose={() => setSelectedId(null)}
+        />
+      )}
     </div>
   )
 }

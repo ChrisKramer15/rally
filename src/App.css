@@ -2437,3 +2437,71 @@
   background: rgba(255, 77, 109, 0.12);
   border: 1px solid rgba(255, 77, 109, 0.3);
 }
+
+/* ---------- Backtest: clickable rows ---------- */
+/* Open + pending rows open the trade-detail chart modal on click. The close /
+   cancel button inside stops propagation so it doesn't also open the modal. */
+.bt-row-clickable {
+  cursor: pointer;
+  transition: background 0.12s ease, box-shadow 0.12s ease;
+}
+
+.bt-row-clickable:hover {
+  background: rgba(120, 90, 255, 0.08);
+}
+
+.bt-row-pending.bt-row-clickable:hover {
+  background: rgba(34, 227, 255, 0.09);
+}
+
+.bt-row-clickable:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--neon-cyan);
+  background: rgba(34, 227, 255, 0.06);
+}
+
+/* "Open" status pill in the trade-detail modal header (mirrors bt-pending-tag). */
+.bt-open-tag {
+  color: var(--neon-green);
+}
+
+/* ---------- Trade-detail modal: level legend ---------- */
+.tl-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 4px 14px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+}
+
+.tl-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.tl-legend-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+}
+
+.tl-legend-meta {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+@media (max-width: 680px) {
+  .tl-legend-meta {
+    margin-left: 0;
+    width: 100%;
+  }
+}
