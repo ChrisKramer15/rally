@@ -344,9 +344,10 @@ function CandleChart({ bars, timeframe, width, explosiveGrades, freshDates, zone
     resolveIdxFromClientX(e.clientX)
   }, [resolveIdxFromClientX])
 
-  // Touch: dragging a finger across the chart scrubs the crosshair. The
-  // `touch-action: pan-x` style on the <svg> keeps a vertical drag from
-  // scrolling the page while scrubbing.
+  // Touch: dragging a finger across the plot scrubs the crosshair only — it must
+  // NOT also pan the horizontal scroll. `touch-action: none` on the <svg>
+  // (set below) tells the browser to hand every touch gesture to us instead of
+  // scrolling the container; history scrolling is done via the scrollbar.
   const touchMoveHandler = useCallback((e: React.TouchEvent<SVGSVGElement>) => {
     const t = e.touches[0]
     if (!t) return
@@ -420,7 +421,7 @@ function CandleChart({ bars, timeframe, width, explosiveGrades, freshDates, zone
       onTouchStart={touchMoveHandler}
       onTouchMove={touchMoveHandler}
       onTouchEnd={() => setHoveredIdx(null)}
-      style={{ cursor: 'crosshair', touchAction: 'pan-x' }}
+      style={{ cursor: 'crosshair', touchAction: 'none' }}
     >
       <defs>
         <linearGradient id="tdVolUp" x1="0" y1="0" x2="0" y2="1">
@@ -504,6 +505,15 @@ function CandleChart({ bars, timeframe, width, explosiveGrades, freshDates, zone
       {crosshairX !== null && (
         <line x1={crosshairX} y1={PAD_T} x2={crosshairX} y2={PAD_T + priceH}
           stroke="rgba(200,200,255,0.35)" strokeWidth={1} strokeDasharray="3 3" pointerEvents="none" />
+      )}
+
+      {/* ── Crosshair (horizontal price line at the hovered bar's close) ── */}
+      {hoveredIdx !== null && bars[hoveredIdx] && (
+        <line
+          x1={PAD_L} y1={priceY(bars[hoveredIdx].close)}
+          x2={chartW - PAD_R} y2={priceY(bars[hoveredIdx].close)}
+          stroke="rgba(0,240,255,0.45)" strokeWidth={1} strokeDasharray="3 3" pointerEvents="none"
+        />
       )}
 
       {/* ── Crosshair date pill (follows the scrub along the bottom axis) ── */}
@@ -711,16 +721,17 @@ function PriceAxis({ priceLabels, priceY, hoverClose }: PriceAxisProps) {
       ))}
 
       {hoverClose !== null && (() => {
-        const py = priceY(hoverClose)
+        // Clamp vertically so the pill stays fully visible at the chart extremes.
+        const py = Math.min(Math.max(priceY(hoverClose), PAD_T + 7), CHART_H - 7)
         return (
-          <>
-            <line x1={0} y1={py} x2={4} y2={py} stroke="rgba(200,200,255,0.5)" strokeWidth={1} />
-            <rect x={2} y={py - 6} width={48} height={13} fill="rgba(20,23,38,0.92)" rx={2} />
-            <text x={4} y={py + 3} textAnchor="start" fontSize={9}
-              fill="var(--neon-cyan)" style={{ fontFamily: 'var(--mono)' }}>
+          <g className="td-axis-hover">
+            <rect x={0} y={py - 7} width={W} height={14}
+              fill="var(--neon-cyan)" rx={2} />
+            <text x={W / 2} y={py + 3} textAnchor="middle" fontSize={9} fontWeight={700}
+              fill="#04121a" style={{ fontFamily: 'var(--mono)' }}>
               {formatCurrency(hoverClose)}
             </text>
-          </>
+          </g>
         )
       })()}
     </svg>

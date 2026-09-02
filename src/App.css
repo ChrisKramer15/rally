@@ -1173,9 +1173,9 @@
      pinned price axis. The inner .td-chart-scroll does the scrolling. */
   overflow: hidden;
   margin-bottom: 16px;
-  /* 340px chart + room for the 8px horizontal scrollbar so the bottom of the
+  /* 340px chart + room for the 12px horizontal scrollbar so the bottom of the
      volume bars / date labels isn't clipped on classic-scrollbar platforms. */
-  min-height: 350px;
+  min-height: 354px;
 }
 
 /* Inner scroller: holds the candle SVG and scrolls horizontally when the chart
@@ -1209,20 +1209,34 @@
   background: linear-gradient(to right, transparent, rgba(10, 11, 18, 0.82) 55%);
   pointer-events: none;
 }
-.td-price-axis text {
-  /* Small shadow so figures stay legible even where the backdrop is faint. */
+/* Static price labels: a dark outline keeps figures legible over any candles
+   that scroll behind the axis. Scoped so it does NOT touch the solid cyan hover
+   pill (which has dark text on a bright fill and needs no outline). */
+.td-price-axis > text {
   paint-order: stroke;
   stroke: rgba(10, 11, 18, 0.9);
   stroke-width: 2px;
 }
 
-/* Subtle scrollbar for the inner scroller. */
+/* Scrollbar for the inner scroller. History scrolling is scrollbar-only (the
+   plot itself scrubs the crosshair), so keep the bar tall enough to grab
+   comfortably, including on touch. */
+.td-chart-scroll {
+  scrollbar-width: auto;
+  scrollbar-color: rgba(120, 90, 255, 0.45) transparent;
+}
 .td-chart-scroll::-webkit-scrollbar {
-  height: 8px;
+  height: 12px;
 }
 .td-chart-scroll::-webkit-scrollbar-thumb {
-  background: rgba(120, 90, 255, 0.35);
-  border-radius: 4px;
+  background: rgba(120, 90, 255, 0.45);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.td-chart-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(120, 90, 255, 0.65);
+  background-clip: content-box;
 }
 .td-chart-scroll::-webkit-scrollbar-track {
   background: transparent;
