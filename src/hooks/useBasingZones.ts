@@ -30,11 +30,12 @@ export type ZoneKind = 'demand' | 'supply'
 export interface BasingZone {
   symbol: string
   kind: ZoneKind
-  /** Line closest to current price. */
+  /** Line closest to current price. Snaps to the body extreme (highest body for
+   *  demand, lowest body for supply), not the wick. */
   proximal: number
-  /** Line furthest from current price. */
+  /** Line furthest from current price. Sits on the wick extreme. */
   distal: number
-  /** Zone height as % of the distal price. */
+  /** Zone height (proximal→distal) as % of the distal price. */
   baseHeightPct: number
   /** Number of basing candles (1 = single-candle base). */
   candleCount: number
@@ -155,6 +156,11 @@ function detectBase(
 
   let hi = -Infinity
   let lo = Infinity
+  // Body extremes (top/bottom of the candle bodies, ignoring wicks). The
+  // proximal line snaps to these so entries sit at the edge of the basing
+  // bodies rather than the wick tips.
+  let bodyHi = -Infinity
+  let bodyLo = Infinity
   let startIdx = explosiveIdx // exclusive of the explosive candle until we add one
 
   for (
@@ -171,6 +177,8 @@ function detectBase(
     if (nextHi - nextLo > TIGHT_LIMIT_MULT * atr) break
     hi = nextHi
     lo = nextLo
+    bodyHi = Math.max(bodyHi, b.open, b.close)
+    bodyLo = Math.min(bodyLo, b.open, b.close)
     startIdx = j
   }
 
@@ -178,10 +186,13 @@ function detectBase(
   if (candleCount < 1) return null // no base = support/resistance, not a zone
 
   // Zone lines. Proximal = the edge the move departed from (closest to price
-  // after the move); distal = the far edge.
-  const proximal = kind === 'demand' ? hi : lo
+  // after the move); distal = the far edge. The proximal line snaps to the
+  // body extreme (highest body for demand, lowest body for supply) rather than
+  // the wick, so entries align with the basing bodies. The distal line stays on
+  // the wick to keep the protective (stop) side conservative.
+  const proximal = kind === 'demand' ? bodyHi : bodyLo
   const distal = kind === 'demand' ? lo : hi
-  const baseHeight = hi - lo
+  const baseHeight = Math.abs(proximal - distal)
   const baseHeightPct = distal !== 0 ? (baseHeight / Math.abs(distal)) * 100 : 0
 
   // Body contrast: explosive body vs average basing body.
@@ -207,7 +218,9 @@ function detectBase(
   const avgPriorVol = priorVolCount > 0 ? priorVolSum / priorVolCount : avgBaseVol
   const volumeDrop = avgPriorVol > 0 ? avgBaseVol / avgPriorVol : 1
 
-  const tightness = baseHeight / atr
+  // Tightness grades the full wick-to-wick span of the base against ATR, to
+  // stay consistent with the base-detection envelope (TIGHT_LIMIT_MULT).
+  const tightness = (hi - lo) / atr
   const grade = gradeZone({ tightness, candleCount, bodyContrast, volumeDrop })
 
   // Mitigation: has price returned to the proximal (entry) line since the
