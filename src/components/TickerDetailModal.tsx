@@ -126,6 +126,9 @@ export function TickerDetailModal({ stock, onClose, explosiveGrades, freshDates 
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
+  // (Horizontal auto-scroll to the latest candles is handled inside CandleChart,
+  // which owns the scroll container.)
+
   const ranges = RANGE_OPTIONS[timeframe]
   const safeRangeIdx = Math.min(rangeIdx, ranges.length - 1)
   const slicedDaily = bars.slice(-ranges[safeRangeIdx].bars)
@@ -295,28 +298,60 @@ const PAD_T = 12
 const PAD_B = 8
 const PAD_L = 0
 const PAD_R = 52
+/**
+ * Minimum horizontal space per candle (px). Keeps candles from scrunching
+ * together and gives each a comfortable click/tap target. When the bar count
+ * needs more room than the container, the chart grows wider and its wrapper
+ * scrolls horizontally rather than compressing the candles.
+ */
+const MIN_STEP = 12
 
 function CandleChart({ bars, timeframe, width, explosiveGrades, freshDates, zones, selectedDate, onSelectBar }: CandleChartProps) {
   const n = bars.length
 
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null)
   const svgRef = useRef<SVGSVGElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
 
-  // viewBox width tracks the real rendered width so the 1:1 aspect ratio holds
-  // and text/candles never stretch horizontally.
-  const chartW = Math.max(320, Math.round(width))
+  // Width the candles need at the minimum comfortable step. If this exceeds the
+  // container, the chart overflows and the wrapper scrolls horizontally; if the
+  // bars fit, the chart fills the container as before.
+  const containerW = Math.max(320, Math.round(width))
+  const neededW = n * MIN_STEP + PAD_L + PAD_R
+  const chartW = Math.max(containerW, neededW)
   const totalW = chartW - PAD_L - PAD_R
   const step = n > 0 ? totalW / n : totalW
 
-  // Declared before the early return so hook order stays stable across renders.
-  const mouseMoveHandler = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
+  // Start scrolled to the right so the most recent candles show first; the user
+  // scrolls (or drags) left for older history.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (el) el.scrollLeft = el.scrollWidth
+  }, [n, chartW])
+
+  // Shared pointer→bar-index resolver for both mouse and touch. Declared before
+  // the early return so hook order stays stable across renders.
+  const resolveIdxFromClientX = useCallback((clientX: number) => {
     const svg = svgRef.current
     if (!svg) return
     const rect = svg.getBoundingClientRect()
-    const vbX = ((e.clientX - rect.left) / rect.width) * chartW
+    const vbX = ((clientX - rect.left) / rect.width) * chartW
     const idx = Math.floor((vbX - PAD_L) / step)
     setHoveredIdx(idx >= 0 && idx < n ? idx : null)
   }, [n, step, chartW])
+
+  const mouseMoveHandler = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
+    resolveIdxFromClientX(e.clientX)
+  }, [resolveIdxFromClientX])
+
+  // Touch: dragging a finger across the chart scrubs the crosshair. The
+  // `touch-action: pan-x` style on the <svg> keeps a vertical drag from
+  // scrolling the page while scrubbing.
+  const touchMoveHandler = useCallback((e: React.TouchEvent<SVGSVGElement>) => {
+    const t = e.touches[0]
+    if (!t) return
+    resolveIdxFromClientX(t.clientX)
+  }, [resolveIdxFromClientX])
 
   if (n < 2) return null
 
@@ -367,16 +402,25 @@ function CandleChart({ bars, timeframe, width, explosiveGrades, freshDates, zone
     })
     .filter((r): r is NonNullable<typeof r> => r !== null)
 
+  const hoverClose = hoveredIdx !== null && bars[hoveredIdx] ? bars[hoveredIdx].close : null
+
   return (
+   <>
+    <div className="td-chart-scroll" ref={scrollRef}>
     <svg
       ref={svgRef}
       viewBox={`0 0 ${chartW} ${CHART_H}`}
+      width={chartW}
+      height={CHART_H}
       className="td-candle-svg"
       role="img"
       aria-label={`${timeframe === 'W' ? 'Weekly' : 'Daily'} candlestick chart`}
       onMouseMove={mouseMoveHandler}
       onMouseLeave={() => setHoveredIdx(null)}
-      style={{ cursor: 'crosshair' }}
+      onTouchStart={touchMoveHandler}
+      onTouchMove={touchMoveHandler}
+      onTouchEnd={() => setHoveredIdx(null)}
+      style={{ cursor: 'crosshair', touchAction: 'pan-x' }}
     >
       <defs>
         <linearGradient id="tdVolUp" x1="0" y1="0" x2="0" y2="1">
@@ -456,11 +500,30 @@ function CandleChart({ bars, timeframe, width, explosiveGrades, freshDates, zone
         )
       })}
 
-      {/* ── Crosshair ── */}
+      {/* ── Crosshair (vertical scrub line) ── */}
       {crosshairX !== null && (
         <line x1={crosshairX} y1={PAD_T} x2={crosshairX} y2={PAD_T + priceH}
-          stroke="rgba(200,200,255,0.25)" strokeWidth={1} strokeDasharray="3 3" pointerEvents="none" />
+          stroke="rgba(200,200,255,0.35)" strokeWidth={1} strokeDasharray="3 3" pointerEvents="none" />
       )}
+
+      {/* ── Crosshair date pill (follows the scrub along the bottom axis) ── */}
+      {crosshairX !== null && hoveredIdx !== null && bars[hoveredIdx] && (() => {
+        const label = formatDateLabel(bars[hoveredIdx].date)
+        const boxW = 52
+        // Clamp so the pill never runs past the plotted area's edges.
+        const cx = Math.min(Math.max(crosshairX, PAD_L + boxW / 2), chartW - PAD_R - boxW / 2)
+        const boxY = PAD_T + priceH + 2
+        return (
+          <g pointerEvents="none">
+            <rect x={cx - boxW / 2} y={boxY} width={boxW} height={14}
+              fill="rgba(20,23,38,0.92)" stroke="rgba(200,200,255,0.35)" strokeWidth={0.75} rx={2} />
+            <text x={cx} y={boxY + 10} textAnchor="middle" fontSize={9}
+              fill="var(--neon-cyan)" style={{ fontFamily: 'var(--mono)' }}>
+              {label}
+            </text>
+          </g>
+        )
+      })()}
 
       {/* ── Candles ── */}
       {bars.map((bar, i) => {
@@ -601,15 +664,6 @@ function CandleChart({ bars, timeframe, width, explosiveGrades, freshDates, zone
         )
       })}
 
-      {/* ── Price labels ── */}
-      {priceLabels.map((price, i) => (
-        <text key={i} x={chartW - PAD_R + 4} y={priceY(price) + 3}
-          textAnchor="start" fontSize={9} fill="var(--muted)"
-          style={{ fontFamily: 'var(--mono)', pointerEvents: 'none' }}>
-          {formatCurrency(price)}
-        </text>
-      ))}
-
       {/* ── Date labels ── */}
       {dateLabels.map(({ i, date }) => (
         <text key={date} x={PAD_L + i * step + step / 2} y={PAD_T + priceH + 10}
@@ -618,21 +672,53 @@ function CandleChart({ bars, timeframe, width, explosiveGrades, freshDates, zone
           {formatDateLabel(date)}
         </text>
       ))}
+      {/* NOTE: price labels + the crosshair close label live in the pinned
+          PriceAxis overlay (a sibling, non-scrolling SVG) so they stay put when
+          the chart scrolls horizontally. See below. */}
+    </svg>
+    </div>
+    <PriceAxis priceLabels={priceLabels} priceY={priceY} hoverClose={hoverClose} />
+   </>
+  )
+}
 
-      {/* ── Crosshair close label ── */}
-      {crosshairX !== null && hoveredIdx !== null && (() => {
-        const bar = bars[hoveredIdx]
-        if (!bar) return null
-        const py = priceY(bar.close)
+// ── Pinned price axis ──────────────────────────────────────────────────────
+// Rendered as a separate, non-scrolling SVG layered over the right edge of the
+// chart so the price scale (and the live crosshair price) stays visible while
+// the candles scroll underneath.
+interface PriceAxisProps {
+  priceLabels: number[]
+  priceY: (p: number) => number
+  hoverClose: number | null
+}
+
+function PriceAxis({ priceLabels, priceY, hoverClose }: PriceAxisProps) {
+  const W = PAD_R
+  return (
+    <svg
+      className="td-price-axis"
+      viewBox={`0 0 ${W} ${CHART_H}`}
+      width={W}
+      height={CHART_H}
+      aria-hidden="true"
+    >
+      {priceLabels.map((price, i) => (
+        <text key={i} x={4} y={priceY(price) + 3}
+          textAnchor="start" fontSize={9} fill="var(--muted)"
+          style={{ fontFamily: 'var(--mono)' }}>
+          {formatCurrency(price)}
+        </text>
+      ))}
+
+      {hoverClose !== null && (() => {
+        const py = priceY(hoverClose)
         return (
           <>
-            <line x1={chartW - PAD_R} y1={py} x2={chartW - PAD_R + 4} y2={py}
-              stroke="rgba(200,200,255,0.5)" strokeWidth={1} pointerEvents="none" />
-            <rect x={chartW - PAD_R + 4} y={py - 6} width={48} height={13}
-              fill="rgba(20,23,38,0.85)" rx={2} pointerEvents="none" />
-            <text x={chartW - PAD_R + 6} y={py + 3} textAnchor="start" fontSize={9}
-              fill="var(--neon-cyan)" style={{ fontFamily: 'var(--mono)', pointerEvents: 'none' }}>
-              {formatCurrency(bar.close)}
+            <line x1={0} y1={py} x2={4} y2={py} stroke="rgba(200,200,255,0.5)" strokeWidth={1} />
+            <rect x={2} y={py - 6} width={48} height={13} fill="rgba(20,23,38,0.92)" rx={2} />
+            <text x={4} y={py + 3} textAnchor="start" fontSize={9}
+              fill="var(--neon-cyan)" style={{ fontFamily: 'var(--mono)' }}>
+              {formatCurrency(hoverClose)}
             </text>
           </>
         )

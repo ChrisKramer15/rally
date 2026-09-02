@@ -1169,18 +1169,63 @@
   background: rgba(10, 11, 18, 0.5);
   border: 1px solid var(--panel-border);
   border-radius: 10px;
+  /* The wrapper itself no longer scrolls — it's the positioning context for the
+     pinned price axis. The inner .td-chart-scroll does the scrolling. */
   overflow: hidden;
   margin-bottom: 16px;
-  min-height: 340px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  /* 340px chart + room for the 8px horizontal scrollbar so the bottom of the
+     volume bars / date labels isn't clipped on classic-scrollbar platforms. */
+  min-height: 350px;
+}
+
+/* Inner scroller: holds the candle SVG and scrolls horizontally when the chart
+   is wider than the wrapper, so candles keep a comfortable width. */
+.td-chart-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* No right padding needed: the candle SVG already reserves PAD_R (52px) of
+     empty space on its right, which aligns under the pinned price axis when
+     scrolled fully right. When scrolled left, the axis floats over the plot
+     (its gradient backdrop keeps the labels readable). */
+  -webkit-overflow-scrolling: touch;
 }
 
 .td-candle-svg {
   display: block;
-  width: 100%;
+  /* Intrinsic width comes from the width attribute (chartW); never force 100%
+     or the overflow/scroll behaviour collapses. */
   height: 340px;
+}
+
+/* Pinned price axis: sits over the right edge and does NOT scroll. */
+.td-price-axis {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 340px;
+  /* Backdrop keeps the labels readable over any candles that scroll behind the
+     axis. Kept mostly transparent at the left edge so it occludes as little of
+     the plot as possible, ramping to near-opaque only under the label text. */
+  background: linear-gradient(to right, transparent, rgba(10, 11, 18, 0.82) 55%);
+  pointer-events: none;
+}
+.td-price-axis text {
+  /* Small shadow so figures stay legible even where the backdrop is faint. */
+  paint-order: stroke;
+  stroke: rgba(10, 11, 18, 0.9);
+  stroke-width: 2px;
+}
+
+/* Subtle scrollbar for the inner scroller. */
+.td-chart-scroll::-webkit-scrollbar {
+  height: 8px;
+}
+.td-chart-scroll::-webkit-scrollbar-thumb {
+  background: rgba(120, 90, 255, 0.35);
+  border-radius: 4px;
+}
+.td-chart-scroll::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .td-loading,
