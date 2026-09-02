@@ -1,5 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { changePct } from './data/stocks'
+import { loadCached } from './data/dailyCache'
+import { detectBasesForBars } from './hooks/useBasingZones'
 import { useIndexMarket } from './hooks/useIndexMarket'
 import { useWatchlist } from './hooks/useWatchlist'
 import { useWatchlistMarket } from './hooks/useWatchlistMarket'
@@ -7,12 +9,15 @@ import { IndexCard } from './components/IndexCard'
 import { Watchlist } from './components/Watchlist'
 import { WatchlistEditor } from './components/WatchlistEditor'
 import { TickerDetailModal } from './components/TickerDetailModal'
+import { TradeTicketModal, type TradeTicket } from './components/TradeTicketModal'
 import { Movers } from './components/Movers'
 import { DataPipeline } from './components/DataPipeline'
 import { ExplosiveMoves } from './components/ExplosiveMoves'
+import { Backtest } from './components/Backtest'
+import { useBacktestPortfolio, type ZoneKind } from './hooks/useBacktestPortfolio'
 import './App.css'
 
-type View = 'dashboard' | 'signals' | 'pipeline'
+type View = 'dashboard' | 'signals' | 'backtest' | 'pipeline'
 
 function App() {
   const [view, setView] = useState<View>('dashboard')
@@ -26,9 +31,80 @@ function App() {
   // Daily watchlist data from Tiingo, cached per trading day; simulated when no key is set.
   const { stocks, flash, lastUpdated, status, error, usage } = useWatchlistMarket(symbols)
 
+  // Paper-trading portfolio for the Backtest page (persisted to localStorage).
+  const portfolio = useBacktestPortfolio()
+
   // Ticker detail modal — null means closed.
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
   const selectedStock = selectedSymbol ? stocks.find((s) => s.symbol === selectedSymbol) ?? null : null
+
+  // Trade ticket — the symbol the user is placing an order for (null = closed).
+  const [tradeSymbol, setTradeSymbol] = useState<string | null>(null)
+  const tradeStock = tradeSymbol ? stocks.find((s) => s.symbol === tradeSymbol) ?? null : null
+
+  // Trade action: open the order ticket. Closes any detail modal first.
+  const handleTrade = (symbol: string) => {
+    setSelectedSymbol(null)
+    setTradeSymbol(symbol)
+  }
+
+  // The proximal line + zone side for the symbol being traded, from its most
+  // recent basing zone. Used to seed the limit-order price. Computed from the
+  // local daily-bar cache (same source the zones hook uses).
+  const tradeZone = useMemo<{ proximal: number; kind: ZoneKind } | null>(() => {
+    if (!tradeSymbol) return null
+    const cached = loadCached([tradeSymbol])[tradeSymbol]
+    if (!cached || cached.bars.length === 0) return null
+    const zones = detectBasesForBars(cached.bars, tradeSymbol)
+    const latest = zones[zones.length - 1]
+    return latest ? { proximal: latest.proximal, kind: latest.kind } : null
+  }, [tradeSymbol])
+
+  // Place the order from the ticket, then jump to the Backtest page.
+  const handleSubmitTicket = (ticket: TradeTicket) => {
+    if (!tradeStock) return
+    portfolio.openTrade({
+      symbol: tradeStock.symbol,
+      name: tradeStock.name,
+      price: tradeStock.price,
+      shares: ticket.shares,
+      orderType: ticket.orderType,
+      limitPrice: ticket.limitPrice,
+      zoneKind: ticket.zoneKind,
+    })
+    setTradeSymbol(null)
+    setView('backtest')
+  }
+
+  // Pending-order watcher: whenever live prices update, try to fill any resting
+  // limit orders whose proximal line has been touched.
+  // Pending-order watcher: on each feed refresh, test each resting limit order
+  // against its symbol's latest daily bar low/high, so a fill triggers when the
+  // session traded *through* the proximal line (intraday touch), not only when
+  // the close crossed it. The latest bar comes from the local daily-bar cache;
+  // if a symbol isn't cached we fall back to its live price as a flat range.
+  const { fillPending } = portfolio
+  const pendingSymbols = useMemo(
+    () => portfolio.positions.filter((p) => p.status === 'pending').map((p) => p.symbol),
+    [portfolio.positions],
+  )
+  useEffect(() => {
+    if (pendingSymbols.length === 0) return
+    const cached = loadCached(pendingSymbols)
+    const rangeBySymbol = new Map<string, { low: number; high: number }>()
+    for (const sym of pendingSymbols) {
+      const bars = cached[sym]?.bars
+      const latest = bars && bars.length > 0 ? bars[bars.length - 1] : undefined
+      if (latest) {
+        rangeBySymbol.set(sym, { low: latest.low, high: latest.high })
+      } else {
+        // No cached bars — fall back to the live price as a zero-width range.
+        const live = stocks.find((s) => s.symbol === sym)?.price
+        if (live !== undefined) rangeBySymbol.set(sym, { low: live, high: live })
+      }
+    }
+    fillPending(rangeBySymbol)
+  }, [stocks, pendingSymbols, fillPending])
 
   // Ticker tape is always sorted alphabetically, regardless of the watchlist's
   // own sort control.
@@ -85,6 +161,13 @@ function App() {
           </button>
           <button
             type="button"
+            className={`nav-tab ${view === 'backtest' ? 'active' : ''}`}
+            onClick={() => setView('backtest')}
+          >
+            Backtesting
+          </button>
+          <button
+            type="button"
             className={`nav-tab ${view === 'pipeline' ? 'active' : ''}`}
             onClick={() => setView('pipeline')}
           >
@@ -126,7 +209,9 @@ function App() {
           </section>
         </>
       ) : view === 'signals' ? (
-        <ExplosiveMoves stocks={stocks} status={status} />
+        <ExplosiveMoves stocks={stocks} status={status} onTrade={handleTrade} />
+      ) : view === 'backtest' ? (
+        <Backtest stocks={stocks} portfolio={portfolio} />
       ) : (
         <DataPipeline />
       )}
@@ -142,6 +227,21 @@ function App() {
           key={selectedStock.symbol}
           stock={selectedStock}
           onClose={() => setSelectedSymbol(null)}
+          onTrade={handleTrade}
+        />
+      )}
+
+      {tradeStock && (
+        <TradeTicketModal
+          key={tradeStock.symbol}
+          symbol={tradeStock.symbol}
+          name={tradeStock.name}
+          price={tradeStock.price}
+          budget={portfolio.budget}
+          proximal={tradeZone?.proximal ?? null}
+          zoneKind={tradeZone?.kind ?? null}
+          onSubmit={handleSubmitTicket}
+          onClose={() => setTradeSymbol(null)}
         />
       )}
     </div>

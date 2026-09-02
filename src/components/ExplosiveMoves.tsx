@@ -6,6 +6,8 @@ import { TickerDetailModal } from './TickerDetailModal'
 interface ExplosiveMovesProps {
   stocks: Stock[]
   status: 'live' | 'simulated' | 'loading' | 'error'
+  /** Opens a paper position for the symbol and routes to the Backtest page. */
+  onTrade?: (symbol: string) => void
 }
 
 function GradeBadge({ grade }: { grade: ExplosiveGrade }) {
@@ -185,7 +187,7 @@ function MoveRow({
   )
 }
 
-export function ExplosiveMoves({ stocks, status }: ExplosiveMovesProps) {
+export function ExplosiveMoves({ stocks, status, onTrade }: ExplosiveMovesProps) {
   const [moveMultiple, setMoveMultiple] = useState(2)
   const [freshnessDays, setFreshnessDays] = useState(10)
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
@@ -371,6 +373,8 @@ export function ExplosiveMoves({ stocks, status }: ExplosiveMovesProps) {
           onClose={() => setSelectedSymbol(null)}
           explosiveGrades={explosiveGrades}
           freshDates={freshDates}
+          showTrade
+          onTrade={onTrade}
         />
       )}
     </div>

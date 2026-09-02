@@ -21,6 +21,17 @@ interface TickerDetailModalProps {
    * If omitted, all graded candles are treated as fresh.
    */
   freshDates?: Set<string>
+  /**
+   * When provided, a "Trade" button is shown in the header (used by the signals
+   * modal). Receives the symbol so the parent can route it to a broker/order
+   * ticket. If omitted, the button defaults to opening the symbol on TradingView.
+   */
+  onTrade?: (symbol: string) => void
+  /**
+   * Force-show the Trade button even without an onTrade handler. The signals
+   * modal sets this; the plain watchlist modal leaves it off.
+   */
+  showTrade?: boolean
 }
 
 const VOL_SECTION_RATIO = 0.18
@@ -91,7 +102,7 @@ function toWeeklyBars(daily: DailyBar[]): DailyBar[] {
 }
 
 // ── Main modal ───────────────────────────────────────────────────────────────
-export function TickerDetailModal({ stock, onClose, explosiveGrades, freshDates }: TickerDetailModalProps) {
+export function TickerDetailModal({ stock, onClose, explosiveGrades, freshDates, onTrade, showTrade }: TickerDetailModalProps) {
   const [bars, setBars] = useState<DailyBar[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -167,6 +178,21 @@ export function TickerDetailModal({ stock, onClose, explosiveGrades, freshDates 
     setSelectedBar((prev) => prev?.date === bar.date ? null : bar)
   }, [])
 
+  const handleTrade = useCallback(() => {
+    if (onTrade) {
+      onTrade(stock.symbol)
+      return
+    }
+    // Default: open the symbol's chart on TradingView in a new tab.
+    window.open(
+      `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(stock.symbol)}`,
+      '_blank',
+      'noopener,noreferrer',
+    )
+  }, [onTrade, stock.symbol])
+
+  const canTrade = showTrade || onTrade !== undefined
+
   // Grade of the currently-shown stats bar (for stat strip accent).
   const statsBarGrade = statsBar ? (activeGrades?.get(statsBar.date) ?? null) : null
 
@@ -195,6 +221,15 @@ export function TickerDetailModal({ stock, onClose, explosiveGrades, freshDates 
               {positive ? '+' : ''}{pct.toFixed(2)}%
             </span>
           </div>
+          {canTrade && (
+            <button
+              className="td-trade-btn"
+              onClick={handleTrade}
+              title={`Trade ${stock.symbol}`}
+            >
+              ⇅ Trade
+            </button>
+          )}
           <button className="wl-close" aria-label="Close" onClick={onClose}>×</button>
         </div>
 

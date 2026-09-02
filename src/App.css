@@ -1030,6 +1030,30 @@
 .td-change.up { color: var(--neon-green); }
 .td-change.down { color: var(--neon-red); }
 
+/* Trade action in the signals modal header */
+.td-trade-btn {
+  flex-shrink: 0;
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--neon-cyan);
+  background: rgba(0, 240, 255, 0.08);
+  border: 1px solid rgba(0, 240, 255, 0.4);
+  border-radius: 7px;
+  padding: 7px 14px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.td-trade-btn:hover {
+  background: rgba(0, 240, 255, 0.18);
+  border-color: rgba(0, 240, 255, 0.65);
+  color: var(--text-h);
+}
+.td-trade-btn:active {
+  transform: translateY(1px);
+}
+
 /* ---------- Controls row ---------- */
 .td-controls {
   display: flex;
@@ -1813,4 +1837,523 @@
   .em-sep {
     display: none;
   }
+}
+
+/* ---------- Backtesting page ---------- */
+.bt-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.bt-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px 24px;
+}
+
+.bt-header-left {
+  flex: 1 1 240px;
+  min-width: 220px;
+}
+
+.bt-subtitle {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+  max-width: 520px;
+}
+
+/* ── Budget control ── */
+.bt-budget {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bt-budget-label {
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+}
+
+.bt-budget-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 8px 12px;
+}
+
+.bt-budget-input-wrap:focus-within {
+  border-color: var(--neon-purple);
+  box-shadow: var(--glow);
+}
+
+.bt-budget-dollar {
+  font-family: var(--mono);
+  font-size: 18px;
+  color: var(--muted);
+}
+
+.bt-budget-input {
+  width: 120px;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-family: var(--mono);
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+/* ── Summary metrics ── */
+.bt-metrics {
+  display: flex;
+  gap: 22px;
+  flex-wrap: wrap;
+}
+
+.bt-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.bt-metric-label {
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+}
+
+.bt-metric-val {
+  font-family: var(--mono);
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-h);
+}
+.bt-metric-val.up { color: var(--neon-green); }
+.bt-metric-val.down { color: var(--neon-red); }
+
+/* ── Table ── */
+.bt-table-panel {
+  padding-top: 14px;
+}
+
+.bt-table-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.bt-section-title {
+  margin: 0;
+  font-size: 15px;
+  color: var(--text-h);
+}
+
+.bt-reset-btn {
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
+}
+.bt-reset-btn:hover {
+  color: var(--neon-red);
+  border-color: rgba(255, 77, 109, 0.4);
+}
+
+.bt-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* 7 cols: date | ticker | trade cost | current cost | stop | cash-out | action */
+.bt-row {
+  display: grid;
+  grid-template-columns: 1.1fr 1.6fr 1.2fr 1.2fr 1fr 1fr 40px;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 8px;
+  border-bottom: 1px solid rgba(120, 90, 255, 0.08);
+}
+
+.bt-row-head {
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.bt-row-head .bt-col-num { text-align: right; }
+
+.bt-col-date {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.bt-col-sym {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.bt-sym {
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-h);
+  letter-spacing: 0.5px;
+}
+
+.bt-name {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bt-shares {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--neon-cyan);
+}
+
+.bt-col-num {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  text-align: right;
+}
+
+.bt-cost {
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-h);
+}
+.bt-cost.up { color: var(--neon-green); }
+.bt-cost.down { color: var(--neon-red); }
+
+.bt-sub {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+.bt-sub.up { color: var(--neon-green); }
+.bt-sub.down { color: var(--neon-red); }
+
+.bt-stop {
+  font-family: var(--mono);
+  font-size: 14px;
+  color: var(--neon-red);
+}
+
+.bt-target {
+  font-family: var(--mono);
+  font-size: 14px;
+  color: var(--neon-green);
+}
+
+/* Highlight when live price has crossed a managed level. */
+.bt-hit {
+  font-weight: 700;
+  text-shadow: 0 0 8px currentColor;
+}
+
+.bt-col-action {
+  display: flex;
+  justify-content: center;
+}
+
+.bt-close-btn {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+  transition: color 0.12s;
+}
+.bt-close-btn:hover {
+  color: var(--neon-red);
+}
+
+/* ── Empty state ── */
+.bt-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.bt-empty-icon {
+  font-size: 32px;
+}
+
+.bt-footnote {
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+@media (max-width: 760px) {
+  .bt-row {
+    grid-template-columns: 1fr 1.4fr 1.1fr 1.1fr 36px;
+    gap: 8px;
+  }
+  /* Drop stop-loss + cash-out columns on narrow screens. */
+  .bt-row > .bt-col-num:nth-child(5),
+  .bt-row > .bt-col-num:nth-child(6) {
+    display: none;
+  }
+  .bt-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+/* ---------- Trade ticket modal ---------- */
+.tt-modal {
+  max-width: 420px;
+}
+
+.tt-title-group {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.tt-name {
+  font-size: 13px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tt-price-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 10px 0 14px;
+  border-bottom: 1px solid var(--panel-border);
+  margin-bottom: 14px;
+}
+
+.tt-price-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+}
+
+.tt-price-val {
+  font-family: var(--mono);
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.tt-field {
+  margin-bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tt-field-label {
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tt-proximal-tag {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--neon-cyan);
+  background: rgba(34, 227, 255, 0.12);
+  border: 1px solid rgba(34, 227, 255, 0.3);
+  border-radius: 5px;
+  padding: 1px 6px;
+}
+
+/* Segmented order-type control */
+.tt-seg {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  background: rgba(10, 11, 18, 0.5);
+}
+
+.tt-seg-btn {
+  flex: 1;
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  border-radius: 7px;
+  padding: 8px 10px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.tt-seg-btn:hover {
+  color: var(--text-h);
+}
+.tt-seg-btn.active {
+  color: #fff;
+  background: var(--neon-purple);
+  box-shadow: var(--glow);
+}
+
+.tt-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--mono);
+  font-size: 15px;
+  color: var(--text-h);
+  background: var(--bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+.tt-input:focus {
+  outline: none;
+  border-color: var(--neon-purple);
+  box-shadow: var(--glow);
+}
+
+.tt-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 0 12px;
+}
+.tt-input-wrap:focus-within {
+  border-color: var(--neon-purple);
+  box-shadow: var(--glow);
+}
+.tt-input-dollar {
+  font-family: var(--mono);
+  font-size: 15px;
+  color: var(--muted);
+}
+.tt-input-inline {
+  border: none;
+  background: transparent;
+  padding: 10px 0;
+}
+.tt-input-inline:focus {
+  box-shadow: none;
+}
+
+.tt-trigger-hint {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--neon-cyan);
+}
+
+.tt-cost-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-top: 1px solid var(--panel-border);
+  margin-top: 4px;
+}
+
+.tt-cost-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+}
+
+.tt-cost-val {
+  font-family: var(--mono);
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.tt-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 6px;
+}
+.tt-actions .wl-btn.primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ---------- Backtest: pending orders ---------- */
+.bt-row-pending {
+  background: rgba(34, 227, 255, 0.04);
+}
+
+/* The trigger column spans wider text than the numeric cells. */
+.bt-col-wide {
+  align-items: flex-start !important;
+  text-align: left !important;
+}
+
+.bt-pending-tag {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--neon-cyan);
+}
+
+.bt-reserved {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--neon-cyan);
 }
