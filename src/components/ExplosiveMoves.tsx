@@ -11,21 +11,22 @@ interface ExplosiveMovesProps {
 function GradeBadge({ grade }: { grade: ExplosiveGrade }) {
   return (
     <span className={`em-grade-badge em-grade-${grade === 'A+' ? 'aplus' : 'strong'}`}>
-      {grade === 'A+' ? '⚡ A+' : '▲ Strong'}
+      {grade === 'A+' ? '⚡ A+' : '◆ Strong'}
     </span>
   )
 }
 
 /**
- * Mini bar chart: 4 prior close-to-close moves (grey) + today's move (green/red).
- * Uses the latest candle's changePct; prior bars are approximated from the
- * surrounding context we don't have in this shape, so we just show the one bar
- * with its grade color standing alone — clean and accurate.
+ * Mini move bar: the fill ALWAYS encodes direction (green = up, red = down).
+ * The grade is shown separately as an OUTLINE + soft glow around the bar —
+ * orange for A+, pink for strong — so direction is never masked by the grade
+ * color (mirrors the candle-chart treatment in the detail modal).
  */
 function MoveBar({ move }: { move: ExplosiveMove }) {
   const pct      = move.latest.changePct
   const positive = pct >= 0
   const isAplus  = move.latest.grade === 'A+'
+  const isStrong = move.latest.grade === 'strong'
   const barH     = 28
   const barW     = 14
 
@@ -34,11 +35,20 @@ function MoveBar({ move }: { move: ExplosiveMove }) {
   const h = Math.max(2, (Math.min(Math.abs(pct), maxScale) / maxScale) * (barH * 0.85))
   const y = positive ? barH / 2 - h : barH / 2
 
-  const fill = isAplus
+  // Fill = direction only.
+  const fill = positive ? 'var(--neon-green)' : 'var(--neon-red)'
+
+  // Outline = grade indicator.
+  const outline = isAplus
     ? 'var(--neon-orange)'
-    : positive
-      ? 'var(--neon-green)'
-      : 'var(--neon-red)'
+    : isStrong
+      ? 'var(--neon-pink)'
+      : 'none'
+  const glow = isAplus
+    ? 'drop-shadow(0 0 3px rgba(255,140,0,0.7))'
+    : isStrong
+      ? 'drop-shadow(0 0 3px rgba(255,61,242,0.6))'
+      : undefined
 
   return (
     <svg
@@ -59,8 +69,10 @@ function MoveBar({ move }: { move: ExplosiveMove }) {
         width={barW - 2} height={h}
         rx={2}
         fill={fill}
-        opacity={isAplus ? 1 : 0.85}
-        style={isAplus ? { filter: 'drop-shadow(0 0 3px rgba(255,140,0,0.7))' } : undefined}
+        stroke={outline}
+        strokeWidth={outline === 'none' ? 0 : 1.5}
+        opacity={0.9}
+        style={glow ? { filter: glow } : undefined}
       />
       <line
         x1={0} y1={barH / 2}
@@ -138,16 +150,31 @@ function MoveRow({
         </span>
       </div>
 
+      {/* Move size in ATR multiples */}
+      <div className="em-col-num">
+        <span
+          className="em-stat"
+          style={{ color: latest.atrMultiple >= 3 ? 'var(--neon-orange)' : 'var(--neon-cyan)' }}
+        >
+          {latest.atrMultiple.toFixed(1)}×
+        </span>
+      </div>
+
+      {/* Relative volume */}
+      <div className="em-col-num">
+        <span
+          className="em-stat"
+          style={{ color: latest.relVolume >= 1.5 ? 'var(--neon-orange)' : 'var(--muted)' }}
+        >
+          {latest.relVolume.toFixed(1)}×
+        </span>
+      </div>
+
       {/* Gap % */}
       <div className="em-col-num">
         <span className={`em-stat ${gapPositive ? 'up' : 'down'}`}>
           {gapPositive ? '+' : ''}{latest.gapPct.toFixed(2)}%
         </span>
-      </div>
-
-      {/* Intraday range */}
-      <div className="em-col-num">
-        <span className="em-stat">{latest.rangePct.toFixed(2)}%</span>
       </div>
 
       {/* Date of latest signal */}
@@ -159,25 +186,40 @@ function MoveRow({
 }
 
 export function ExplosiveMoves({ stocks, status }: ExplosiveMovesProps) {
-  const [minChangePct, setMinChangePct] = useState(5)
+  const [moveMultiple, setMoveMultiple] = useState(2)
+  const [freshnessDays, setFreshnessDays] = useState(10)
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
 
-  const { moves, skippedCount, uncachedCount } = useExplosiveMoves(stocks, minChangePct)
+  const { moves: allMoves, skippedCount, uncachedCount } = useExplosiveMoves(
+    stocks,
+    moveMultiple,
+    freshnessDays,
+  )
+
+  // The Signals page is about *actionable* signals, so it lists only symbols
+  // whose most recent explosive move is within the freshness window. Stale
+  // moves still exist in history (and show on the chart, dimmed) — they're just
+  // not surfaced here as live signals.
+  const moves = allMoves.filter((m) => m.latest.isFresh)
 
   const selectedStock: Stock | null = selectedSymbol
     ? (stocks.find((s) => s.symbol === selectedSymbol) ?? null)
     : null
 
   // Pass the full grade map for the selected symbol so the modal highlights
-  // every explosive candle in history, not just the latest one.
-  const explosiveGrades: Map<string, 'A+' | 'strong'> | undefined = selectedSymbol
-    ? (moves.find((m) => m.symbol === selectedSymbol)?.allGrades)
+  // every explosive candle in history, not just the latest one. Freshness
+  // fading uses freshDates below.
+  const selectedMove = selectedSymbol
+    ? allMoves.find((m) => m.symbol === selectedSymbol)
     : undefined
+  const explosiveGrades: Map<string, 'A+' | 'strong'> | undefined = selectedMove?.allGrades
+  const freshDates: Set<string> | undefined = selectedMove?.freshDates
 
   const isLoading = status === 'loading'
 
   const aplusCount  = moves.filter((m) => m.latest.grade === 'A+').length
   const strongCount = moves.length - aplusCount
+  const staleHidden = allMoves.length - moves.length
 
   return (
     <div className="em-page">
@@ -186,8 +228,8 @@ export function ExplosiveMoves({ stocks, status }: ExplosiveMovesProps) {
         <div className="em-header-left">
           <h2>Explosive Moves</h2>
           <p className="em-subtitle">
-            Candles with ≥{minChangePct}% move and ≥60% body ratio, scanned across full history.
-            Orange = A+ marubozu (≥70% body).
+            Fresh signals: a ≥{moveMultiple}× ATR move with ≥60% body in the last {freshnessDays} trading
+            days. Orange = A+ (clean body + volume surge).
           </p>
         </div>
 
@@ -199,14 +241,30 @@ export function ExplosiveMoves({ stocks, status }: ExplosiveMovesProps) {
               <input
                 className="em-control-input"
                 type="number"
-                min={1}
-                max={50}
-                step={0.5}
-                value={minChangePct}
-                onChange={(e) => setMinChangePct(Number(e.target.value))}
-                aria-label="Minimum price change percent"
+                min={0.5}
+                max={10}
+                step={0.25}
+                value={moveMultiple}
+                onChange={(e) => setMoveMultiple(Number(e.target.value))}
+                aria-label="Minimum move in ATR multiples"
               />
-              <span className="em-control-unit">%</span>
+              <span className="em-control-unit">× ATR</span>
+            </div>
+          </label>
+          <label className="em-control">
+            <span className="em-control-label">Freshness</span>
+            <div className="em-control-input-wrap">
+              <input
+                className="em-control-input"
+                type="number"
+                min={1}
+                max={120}
+                step={1}
+                value={freshnessDays}
+                onChange={(e) => setFreshnessDays(Number(e.target.value))}
+                aria-label="Freshness window in trading days"
+              />
+              <span className="em-control-unit">days</span>
             </div>
           </label>
         </div>
@@ -231,10 +289,18 @@ export function ExplosiveMoves({ stocks, status }: ExplosiveMovesProps) {
               )}
             </div>
           )}
+          {staleHidden > 0 && (
+            <span
+              className="em-skipped"
+              title={`${staleHidden} symbol(s) had explosive moves, but only older than the ${freshnessDays}-day window`}
+            >
+              · {staleHidden} stale
+            </span>
+          )}
           {(skippedCount > 0 || uncachedCount > 0) && (
             <span
               className="em-skipped"
-              title={`${uncachedCount} symbols still loading, ${skippedCount} skipped (< 2 bars)`}
+              title={`${uncachedCount} symbols still loading, ${skippedCount} skipped (too little history for ATR)`}
             >
               · {uncachedCount + skippedCount} excluded
             </span>
@@ -251,8 +317,9 @@ export function ExplosiveMoves({ stocks, status }: ExplosiveMovesProps) {
           <div className="em-col-num">Price</div>
           <div className="em-col-num">Move</div>
           <div className="em-col-num">Body</div>
+          <div className="em-col-num">ATR</div>
+          <div className="em-col-num">Vol</div>
           <div className="em-col-num">Gap</div>
-          <div className="em-col-num">Range</div>
           <div className="em-col-num em-col-date">Date</div>
         </div>
 
@@ -265,10 +332,12 @@ export function ExplosiveMoves({ stocks, status }: ExplosiveMovesProps) {
           <div className="em-empty">
             <span className="em-empty-icon">🔍</span>
             <span>
-              No explosive moves found
+              No fresh explosive moves
               {stocks.length === 0
                 ? ' — add symbols to your watchlist to get started.'
-                : '. Try lowering the Min Move threshold.'}
+                : staleHidden > 0
+                  ? `. ${staleHidden} symbol(s) moved earlier — widen the Freshness window to see them.`
+                  : '. Try lowering the Min Move threshold or widening Freshness.'}
             </span>
           </div>
         ) : (
@@ -282,13 +351,15 @@ export function ExplosiveMoves({ stocks, status }: ExplosiveMovesProps) {
 
       {/* ── Legend ── */}
       <div className="em-legend">
-        <span className="em-legend-item"><strong>⚡ A+</strong> — marubozu, body ≥70% of range (little/no wick)</span>
+        <span className="em-legend-item"><strong>⚡ A+</strong> — clean body (≥70%) + volume surge (≥1.5×)</span>
         <span className="em-sep">·</span>
-        <span className="em-legend-item"><strong>▲ Strong</strong> — body 60–69% of range</span>
+        <span className="em-legend-item"><strong>◆ Strong</strong> — clears the bar but not both boosters</span>
         <span className="em-sep">·</span>
         <span className="em-legend-item"><strong>Body</strong> — |close−open| ÷ (high−low)</span>
         <span className="em-sep">·</span>
-        <span className="em-legend-item"><strong>Gap</strong> — open vs prior close</span>
+        <span className="em-legend-item"><strong>ATR</strong> — move size vs normal daily range</span>
+        <span className="em-sep">·</span>
+        <span className="em-legend-item"><strong>Vol</strong> — today's volume vs 20-day average</span>
         <span className="em-sep">·</span>
         <span className="em-legend-item">Click any row to open the full chart</span>
       </div>
@@ -299,6 +370,7 @@ export function ExplosiveMoves({ stocks, status }: ExplosiveMovesProps) {
           stock={selectedStock}
           onClose={() => setSelectedSymbol(null)}
           explosiveGrades={explosiveGrades}
+          freshDates={freshDates}
         />
       )}
     </div>

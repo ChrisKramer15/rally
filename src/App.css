@@ -1096,6 +1096,64 @@
   background: rgba(34, 227, 255, 0.16);
 }
 
+/* Explosive-move highlight toggle */
+.td-explosive-toggle {
+  margin-left: auto;
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  background: rgba(255, 140, 0, 0.06);
+  border: 1px solid rgba(255, 140, 0, 0.2);
+  border-radius: 6px;
+  padding: 3px 10px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.td-explosive-toggle:hover {
+  background: rgba(255, 140, 0, 0.14);
+}
+.td-explosive-toggle.active {
+  color: var(--neon-orange);
+  border-color: rgba(255, 140, 0, 0.45);
+  background: rgba(255, 140, 0, 0.1);
+}
+
+/* Supply/demand basing-zone toggle */
+.td-zone-toggle {
+  /* Claims the right side when it's the only toggle present. */
+  margin-left: auto;
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  background: rgba(120, 90, 255, 0.06);
+  border: 1px solid rgba(120, 90, 255, 0.2);
+  border-radius: 6px;
+  padding: 3px 10px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+/* When the explosive toggle is present it already claims the auto margin, so
+   the zone toggle sits right beside it rather than pushing again. */
+.td-explosive-toggle ~ .td-zone-toggle {
+  margin-left: 8px;
+}
+.td-zone-toggle:hover {
+  background: rgba(120, 90, 255, 0.14);
+}
+.td-zone-toggle.active {
+  color: var(--neon-green);
+  border-color: rgba(52, 227, 140, 0.4);
+  background: rgba(52, 227, 140, 0.1);
+}
+/* When any toggle already claims the auto margin, the clear-selection button
+   should sit right next to it, not push again. */
+.td-zone-toggle ~ .td-clear-sel,
+.td-explosive-toggle ~ .td-clear-sel {
+  margin-left: 8px;
+}
+
 /* ---------- Chart wrapper ---------- */
 .td-chart-wrap {
   position: relative;
@@ -1145,12 +1203,20 @@
   background: rgba(34, 227, 255, 0.03);
 }
 
-/* Orange outline for explosive candle */
+/* Orange outline for explosive (A+) candle */
 .td-stats-explosive {
   border: 1px solid rgba(255, 140, 0, 0.35);
   border-radius: 10px;
   padding: 6px;
   background: rgba(255, 140, 0, 0.04);
+}
+
+/* Pink outline for strong candle */
+.td-stats-strong {
+  border: 1px solid rgba(255, 61, 242, 0.35);
+  border-radius: 10px;
+  padding: 6px;
+  background: rgba(255, 61, 242, 0.04);
 }
 
 .td-stat {
@@ -1333,10 +1399,10 @@
   overflow: hidden;
 }
 
-/* 9 columns: symbol | grade | bar | price | move% | body% | gap | range | date */
+/* 10 columns: symbol | grade | bar | price | move% | body% | atr | vol | gap | date */
 .em-row {
   display: grid;
-  grid-template-columns: 2fr 110px 24px 1fr 1fr 0.8fr 0.8fr 0.8fr 1fr;
+  grid-template-columns: 2fr 110px 24px 1fr 1fr 0.8fr 0.8fr 0.8fr 0.8fr 1fr;
   align-items: center;
   gap: 10px;
   padding: 10px 20px;
@@ -1433,9 +1499,9 @@
 }
 
 .em-grade-strong {
-  color: var(--neon-cyan);
-  background: rgba(34, 227, 255, 0.08);
-  border: 1px solid rgba(34, 227, 255, 0.25);
+  color: var(--neon-pink);
+  background: rgba(255, 61, 242, 0.08);
+  border: 1px solid rgba(255, 61, 242, 0.25);
 }
 
 /* ── Mini move bar column ── */
@@ -1494,9 +1560,9 @@
 }
 
 .em-summary-strong {
-  color: var(--neon-cyan);
-  background: rgba(34, 227, 255, 0.08);
-  border: 1px solid rgba(34, 227, 255, 0.2);
+  color: var(--neon-pink);
+  background: rgba(255, 61, 242, 0.08);
+  border: 1px solid rgba(255, 61, 242, 0.2);
 }
 
 .em-col-num {
@@ -1563,6 +1629,17 @@
 @media (max-width: 1100px) {
   /* Drop Date column */
   .em-row {
+    grid-template-columns: 2fr 110px 24px 1fr 1fr 0.8fr 0.8fr 0.8fr 0.8fr;
+  }
+  .em-row > :nth-child(10),
+  .em-row-head > :nth-child(10) {
+    display: none;
+  }
+}
+
+@media (max-width: 900px) {
+  /* Drop Gap + Date */
+  .em-row {
     grid-template-columns: 2fr 110px 24px 1fr 1fr 0.8fr 0.8fr 0.8fr;
   }
   .em-row > :nth-child(9),
@@ -1571,24 +1648,13 @@
   }
 }
 
-@media (max-width: 900px) {
-  /* Drop Gap + Date */
+@media (max-width: 640px) {
+  /* Drop Vol too */
   .em-row {
-    grid-template-columns: 2fr 110px 24px 1fr 1fr 0.8fr 0.8fr;
+    grid-template-columns: 2fr 100px 24px 1fr 1fr 0.8fr 0.8fr;
   }
   .em-row > :nth-child(8),
   .em-row-head > :nth-child(8) {
-    display: none;
-  }
-}
-
-@media (max-width: 640px) {
-  /* Drop Range too */
-  .em-row {
-    grid-template-columns: 2fr 100px 24px 1fr 1fr 0.8fr;
-  }
-  .em-row > :nth-child(7),
-  .em-row-head > :nth-child(7) {
     display: none;
   }
   .em-header {
