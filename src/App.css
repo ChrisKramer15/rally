@@ -252,6 +252,9 @@
 .watch-sym {
   display: flex;
   flex-direction: column;
+  /* Allow this grid cell to shrink so a long company name can't overflow and
+     overlap the Trend/Price columns. */
+  min-width: 0;
 }
 .watch-sym .sym {
   font-family: var(--mono);
@@ -261,6 +264,11 @@
 .watch-sym .name {
   font-size: 12px;
   color: var(--muted);
+  /* Truncate long names with an ellipsis instead of pushing the layout wide. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 .col-chart {
   display: flex;
@@ -1648,13 +1656,36 @@
   }
 }
 
-@media (max-width: 640px) {
-  /* Drop Vol too */
+@media (max-width: 900px) {
+  /* Tablet: drop Gap (9) so 9 columns fit without crowding. */
   .em-row {
-    grid-template-columns: 2fr 100px 24px 1fr 1fr 0.8fr 0.8fr;
+    grid-template-columns: 2fr 104px 24px 1fr 1fr 0.8fr 0.8fr 0.8fr 1fr;
+    padding-left: 14px;
+    padding-right: 14px;
   }
+  .em-row > :nth-child(9),
+  .em-row-head > :nth-child(9) {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  /* Phone: keep only Symbol | Grade | Bar | Price | Move | Date (6 columns).
+     The visible-child count MUST match the track count or grid auto-placement
+     spills extra cells into new rows and they overlap. Hide Body(6) ATR(7)
+     Vol(8) Gap(9); Date(10) stays. */
+  .em-row {
+    grid-template-columns: 1.6fr 92px 20px 1fr 1fr 0.9fr;
+    gap: 8px;
+  }
+  .em-row > :nth-child(6),
+  .em-row > :nth-child(7),
   .em-row > :nth-child(8),
-  .em-row-head > :nth-child(8) {
+  .em-row > :nth-child(9),
+  .em-row-head > :nth-child(6),
+  .em-row-head > :nth-child(7),
+  .em-row-head > :nth-child(8),
+  .em-row-head > :nth-child(9) {
     display: none;
   }
   .em-header {
