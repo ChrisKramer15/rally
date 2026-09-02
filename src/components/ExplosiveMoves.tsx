@@ -295,6 +295,7 @@ export function ExplosiveMoves({ stocks, status }: ExplosiveMovesProps) {
 
       {selectedStock && (
         <TickerDetailModal
+          key={selectedStock.symbol}
           stock={selectedStock}
           onClose={() => setSelectedSymbol(null)}
           explosiveGrades={explosiveGrades}

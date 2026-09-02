@@ -17,6 +17,24 @@ interface TickerDetailModalProps {
 
 const VOL_SECTION_RATIO = 0.18
 
+/**
+ * Tracks the rendered pixel width of an element via ResizeObserver.
+ * Used to size the candle chart's viewBox so it renders 1:1 with no stretch.
+ */
+function useElementWidth(ref: React.RefObject<HTMLElement | null>, fallback: number): number {
+  const [width, setWidth] = useState(fallback)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const update = () => setWidth(el.clientWidth || fallback)
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [ref, fallback])
+  return width
+}
+
 type Timeframe = 'D' | 'W'
 
 const RANGE_OPTIONS = {
@@ -73,12 +91,14 @@ export function TickerDetailModal({ stock, onClose, explosiveGrades }: TickerDet
   const [rangeIdx, setRangeIdx] = useState(1)
   const [selectedBar, setSelectedBar] = useState<DailyBar | null>(null)
   const overlayRef = useRef<HTMLDivElement>(null)
+  const chartWrapRef = useRef<HTMLDivElement>(null)
+  const chartWidth = useElementWidth(chartWrapRef, CHART_W)
 
+  // The modal is mounted with key={stock.symbol} by its parents, so a symbol
+  // change remounts this component with fresh initial state (loading:true, no
+  // bars, no selection). The effect below only owns the async fetch.
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
-    setError(null)
-    setSelectedBar(null)
     fetchDailyBarsFromSupabase(stock.symbol)
       .then((data) => { if (!cancelled) { setBars(data); setLoading(false) } })
       .catch((e) => {
@@ -173,7 +193,7 @@ export function TickerDetailModal({ stock, onClose, explosiveGrades }: TickerDet
         </div>
 
         {/* ── Chart ── */}
-        <div className="td-chart-wrap">
+        <div className="td-chart-wrap" ref={chartWrapRef}>
           {loading && <div className="td-loading">Loading chart…</div>}
           {!loading && error && <div className="td-error">{error}</div>}
           {!loading && !error && chartBars.length < 2 && <div className="td-loading">No data available yet.</div>}
@@ -181,6 +201,7 @@ export function TickerDetailModal({ stock, onClose, explosiveGrades }: TickerDet
             <CandleChart
               bars={chartBars}
               timeframe={timeframe}
+              width={chartWidth}
               explosiveGrades={explosiveGrades}
               selectedDate={selectedBar?.date ?? null}
               onSelectBar={handleSelectBar}
@@ -207,6 +228,8 @@ export function TickerDetailModal({ stock, onClose, explosiveGrades }: TickerDet
 interface CandleChartProps {
   bars: DailyBar[]
   timeframe: Timeframe
+  /** Measured pixel width of the chart container; drives the viewBox so nothing stretches. */
+  width: number
   explosiveGrades?: Map<string, ExplosiveGrade>
   selectedDate: string | null
   onSelectBar: (bar: DailyBar) => void
@@ -219,15 +242,30 @@ const PAD_B = 8
 const PAD_L = 0
 const PAD_R = 52
 
-function CandleChart({ bars, timeframe, explosiveGrades, selectedDate, onSelectBar }: CandleChartProps) {
+function CandleChart({ bars, timeframe, width, explosiveGrades, selectedDate, onSelectBar }: CandleChartProps) {
   const n = bars.length
-  if (n < 2) return null
 
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null)
   const svgRef = useRef<SVGSVGElement>(null)
 
-  const totalW = CHART_W - PAD_L - PAD_R
-  const step = totalW / n
+  // viewBox width tracks the real rendered width so the 1:1 aspect ratio holds
+  // and text/candles never stretch horizontally.
+  const chartW = Math.max(320, Math.round(width))
+  const totalW = chartW - PAD_L - PAD_R
+  const step = n > 0 ? totalW / n : totalW
+
+  // Declared before the early return so hook order stays stable across renders.
+  const mouseMoveHandler = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
+    const svg = svgRef.current
+    if (!svg) return
+    const rect = svg.getBoundingClientRect()
+    const vbX = ((e.clientX - rect.left) / rect.width) * chartW
+    const idx = Math.floor((vbX - PAD_L) / step)
+    setHoveredIdx(idx >= 0 && idx < n ? idx : null)
+  }, [n, step, chartW])
+
+  if (n < 2) return null
+
   const bodyWidth = timeframe === 'W' ? Math.max(3, step * 0.7) : Math.max(2, step - 1.5)
 
   const allLow  = Math.min(...bars.map((b) => b.low))
@@ -245,24 +283,14 @@ function CandleChart({ bars, timeframe, explosiveGrades, selectedDate, onSelectB
   const dateStep    = Math.max(1, Math.floor(n / 5))
   const dateLabels  = bars.map((b, i) => ({ i, date: b.date })).filter((_, i) => i % dateStep === 0)
 
-  const mouseMoveHandler = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
-    const svg = svgRef.current
-    if (!svg) return
-    const rect = svg.getBoundingClientRect()
-    const vbX = ((e.clientX - rect.left) / rect.width) * CHART_W
-    const idx = Math.floor((vbX - PAD_L) / step)
-    setHoveredIdx(idx >= 0 && idx < n ? idx : null)
-  }, [n, step])
-
   const crosshairX = hoveredIdx !== null ? PAD_L + hoveredIdx * step + step / 2 : null
   const hasAnyExplosive = (explosiveGrades?.size ?? 0) > 0
 
   return (
     <svg
       ref={svgRef}
-      viewBox={`0 0 ${CHART_W} ${CHART_H}`}
+      viewBox={`0 0 ${chartW} ${CHART_H}`}
       className="td-candle-svg"
-      preserveAspectRatio="none"
       role="img"
       aria-label={`${timeframe === 'W' ? 'Weekly' : 'Daily'} candlestick chart`}
       onMouseMove={mouseMoveHandler}
@@ -304,12 +332,12 @@ function CandleChart({ bars, timeframe, explosiveGrades, selectedDate, onSelectB
 
       {/* ── Price grid ── */}
       {priceLabels.map((price, i) => (
-        <line key={i} x1={PAD_L} y1={priceY(price)} x2={CHART_W - PAD_R} y2={priceY(price)}
+        <line key={i} x1={PAD_L} y1={priceY(price)} x2={chartW - PAD_R} y2={priceY(price)}
           stroke="rgba(120,90,255,0.10)" strokeWidth={1} />
       ))}
 
       {/* ── Prev-close reference ── */}
-      <line x1={PAD_L} y1={priceY(refClose)} x2={CHART_W - PAD_R} y2={priceY(refClose)}
+      <line x1={PAD_L} y1={priceY(refClose)} x2={chartW - PAD_R} y2={priceY(refClose)}
         stroke="rgba(177,77,255,0.45)" strokeWidth={1} strokeDasharray="4 3" />
 
       {/* ── Crosshair ── */}
@@ -425,7 +453,7 @@ function CandleChart({ bars, timeframe, explosiveGrades, selectedDate, onSelectB
 
       {/* ── Price labels ── */}
       {priceLabels.map((price, i) => (
-        <text key={i} x={CHART_W - PAD_R + 4} y={priceY(price) + 3}
+        <text key={i} x={chartW - PAD_R + 4} y={priceY(price) + 3}
           textAnchor="start" fontSize={9} fill="var(--muted)"
           style={{ fontFamily: 'var(--mono)', pointerEvents: 'none' }}>
           {formatCurrency(price)}
@@ -448,11 +476,11 @@ function CandleChart({ bars, timeframe, explosiveGrades, selectedDate, onSelectB
         const py = priceY(bar.close)
         return (
           <>
-            <line x1={CHART_W - PAD_R} y1={py} x2={CHART_W - PAD_R + 4} y2={py}
+            <line x1={chartW - PAD_R} y1={py} x2={chartW - PAD_R + 4} y2={py}
               stroke="rgba(200,200,255,0.5)" strokeWidth={1} pointerEvents="none" />
-            <rect x={CHART_W - PAD_R + 4} y={py - 6} width={48} height={13}
+            <rect x={chartW - PAD_R + 4} y={py - 6} width={48} height={13}
               fill="rgba(20,23,38,0.85)" rx={2} pointerEvents="none" />
-            <text x={CHART_W - PAD_R + 6} y={py + 3} textAnchor="start" fontSize={9}
+            <text x={chartW - PAD_R + 6} y={py + 3} textAnchor="start" fontSize={9}
               fill="var(--neon-cyan)" style={{ fontFamily: 'var(--mono)', pointerEvents: 'none' }}>
               {formatCurrency(bar.close)}
             </text>

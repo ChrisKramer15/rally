@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { changePct, formatCurrency, type Stock } from '../data/stocks'
 import { Sparkline } from './Sparkline'
 
@@ -43,12 +43,12 @@ export function Watchlist({ stocks, flash, action, onSelectSymbol }: WatchlistPr
 
   const pageCount = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE))
 
-  // Keep the current page in range if the list shrinks.
-  useEffect(() => {
-    if (page > pageCount - 1) setPage(pageCount - 1)
-  }, [page, pageCount])
+  // Clamp during render instead of syncing via an effect: if the list shrinks
+  // below the current page, fall back to the last valid page without an extra
+  // render pass. `page` state stays as-is and self-corrects on the next change.
+  const safePage = Math.min(page, pageCount - 1)
 
-  const start = page * PAGE_SIZE
+  const start = safePage * PAGE_SIZE
   const visible = sorted.slice(start, start + PAGE_SIZE)
   const rangeEnd = Math.min(start + PAGE_SIZE, sorted.length)
 
@@ -121,8 +121,8 @@ export function Watchlist({ stocks, flash, action, onSelectSymbol }: WatchlistPr
         <div className="watch-pager">
           <button
             className="wl-btn ghost"
-            onClick={() => setPage((p) => Math.max(0, p - 1))}
-            disabled={page === 0}
+            onClick={() => setPage(Math.max(0, safePage - 1))}
+            disabled={safePage === 0}
           >
             Prev
           </button>
@@ -131,8 +131,8 @@ export function Watchlist({ stocks, flash, action, onSelectSymbol }: WatchlistPr
           </span>
           <button
             className="wl-btn ghost"
-            onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
-            disabled={page >= pageCount - 1}
+            onClick={() => setPage(Math.min(pageCount - 1, safePage + 1))}
+            disabled={safePage >= pageCount - 1}
           >
             Next
           </button>

@@ -139,6 +139,7 @@ function App() {
 
       {selectedStock && (
         <TickerDetailModal
+          key={selectedStock.symbol}
           stock={selectedStock}
           onClose={() => setSelectedSymbol(null)}
         />
