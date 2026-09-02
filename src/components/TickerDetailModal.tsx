@@ -310,6 +310,9 @@ function CandleChart({ bars, timeframe, width, explosiveGrades, freshDates, zone
   const n = bars.length
 
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null)
+  // Touch scrub mode: entered on long-press so a normal horizontal drag still
+  // scrolls history. While scrubbing, we swallow the scroll and move the crosshair.
+  const [scrubbing, setScrubbing] = useState(false)
   const svgRef = useRef<SVGSVGElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -344,14 +347,65 @@ function CandleChart({ bars, timeframe, width, explosiveGrades, freshDates, zone
     resolveIdxFromClientX(e.clientX)
   }, [resolveIdxFromClientX])
 
-  // Touch: dragging a finger across the plot scrubs the crosshair only — it must
-  // NOT also pan the horizontal scroll. `touch-action: none` on the <svg>
-  // (set below) tells the browser to hand every touch gesture to us instead of
-  // scrolling the container; history scrolling is done via the scrollbar.
-  const touchMoveHandler = useCallback((e: React.TouchEvent<SVGSVGElement>) => {
-    const t = e.touches[0]
-    if (!t) return
-    resolveIdxFromClientX(t.clientX)
+  // ── Touch interaction (mobile) ──────────────────────────────────────────
+  // Two gestures, no conflict:
+  //   • plain horizontal drag  → scrolls history (native, via touch-action:pan-x)
+  //   • long-press then drag    → scrubs the crosshair (we preventDefault to
+  //                               stop the scroll while the finger is held)
+  // Native (non-passive) listeners are required because React's onTouchMove is
+  // passive and can't call preventDefault to block the scroll.
+  useEffect(() => {
+    const svg = svgRef.current
+    if (!svg) return
+
+    let holdTimer: number | undefined
+    let active = false
+
+    const clearHold = () => {
+      if (holdTimer !== undefined) { window.clearTimeout(holdTimer); holdTimer = undefined }
+    }
+    const stop = () => {
+      clearHold()
+      active = false
+      setScrubbing(false)
+      setHoveredIdx(null)
+    }
+
+    const onStart = (e: TouchEvent) => {
+      const t = e.touches[0]
+      if (!t) return
+      const x = t.clientX
+      // Arm scrub mode after a short hold; until then a drag scrolls history.
+      holdTimer = window.setTimeout(() => {
+        active = true
+        setScrubbing(true)
+        resolveIdxFromClientX(x)
+      }, 260)
+    }
+    const onMove = (e: TouchEvent) => {
+      const t = e.touches[0]
+      if (!t) return
+      if (active) {
+        // Scrubbing: block the scroll and move the crosshair.
+        e.preventDefault()
+        resolveIdxFromClientX(t.clientX)
+      } else {
+        // Finger moved before the hold armed → it's a scroll, cancel the timer.
+        clearHold()
+      }
+    }
+
+    svg.addEventListener('touchstart', onStart, { passive: true })
+    svg.addEventListener('touchmove', onMove, { passive: false })
+    svg.addEventListener('touchend', stop, { passive: true })
+    svg.addEventListener('touchcancel', stop, { passive: true })
+    return () => {
+      clearHold()
+      svg.removeEventListener('touchstart', onStart)
+      svg.removeEventListener('touchmove', onMove)
+      svg.removeEventListener('touchend', stop)
+      svg.removeEventListener('touchcancel', stop)
+    }
   }, [resolveIdxFromClientX])
 
   if (n < 2) return null
@@ -403,25 +457,42 @@ function CandleChart({ bars, timeframe, width, explosiveGrades, freshDates, zone
     })
     .filter((r): r is NonNullable<typeof r> => r !== null)
 
-  const hoverClose = hoveredIdx !== null && bars[hoveredIdx] ? bars[hoveredIdx].close : null
+  const hoverBar = hoveredIdx !== null ? bars[hoveredIdx] ?? null : null
+  const hoverClose = hoverBar ? hoverBar.close : null
+  const hoverChangePct = hoverBar && hoveredIdx! > 0 && bars[hoveredIdx! - 1]
+    ? ((hoverBar.close - bars[hoveredIdx! - 1].close) / bars[hoveredIdx! - 1].close) * 100
+    : null
 
   return (
    <>
+    {/* Readout pinned to the top of the chart, out from under the finger, so the
+        scrubbed bar's date/price stay visible on mobile while dragging. */}
+    {hoverBar && (
+      <div className="td-readout" aria-hidden="true">
+        <span className="td-readout-date">{formatDateLabel(hoverBar.date)}</span>
+        <span className="td-readout-val">O <b>{formatCurrency(hoverBar.open)}</b></span>
+        <span className="td-readout-val">H <b>{formatCurrency(hoverBar.high)}</b></span>
+        <span className="td-readout-val">L <b>{formatCurrency(hoverBar.low)}</b></span>
+        <span className="td-readout-val">C <b>{formatCurrency(hoverBar.close)}</b></span>
+        {hoverChangePct !== null && (
+          <span className={`td-readout-chg ${hoverChangePct >= 0 ? 'up' : 'down'}`}>
+            {hoverChangePct >= 0 ? '+' : ''}{hoverChangePct.toFixed(2)}%
+          </span>
+        )}
+      </div>
+    )}
     <div className="td-chart-scroll" ref={scrollRef}>
     <svg
       ref={svgRef}
       viewBox={`0 0 ${chartW} ${CHART_H}`}
       width={chartW}
       height={CHART_H}
-      className="td-candle-svg"
+      className={`td-candle-svg${scrubbing ? ' scrubbing' : ''}`}
       role="img"
       aria-label={`${timeframe === 'W' ? 'Weekly' : 'Daily'} candlestick chart`}
       onMouseMove={mouseMoveHandler}
       onMouseLeave={() => setHoveredIdx(null)}
-      onTouchStart={touchMoveHandler}
-      onTouchMove={touchMoveHandler}
-      onTouchEnd={() => setHoveredIdx(null)}
-      style={{ cursor: 'crosshair', touchAction: 'none' }}
+      style={{ cursor: 'crosshair', touchAction: 'pan-x' }}
     >
       <defs>
         <linearGradient id="tdVolUp" x1="0" y1="0" x2="0" y2="1">
