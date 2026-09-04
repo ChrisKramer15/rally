@@ -26,9 +26,13 @@ import { useCallback, useEffect, useState } from 'react'
  *                 short → distal + 0.1×ATR   (above the supply base high)
  *                 When no zone/distal is available, falls back to a flat % of
  *                 entry (DEFAULT_STOP_LOSS_PCT).
- *   • cash-out  — a reward target measured from the ACTUAL risk to the stop:
- *                 risk = |entry − stop|;  target = entry ± risk × riskReward.
- *                 riskReward is the user-chosen R:R (2 = 2:1, 3 = 3:1, …).
+ *   • cash-out  — the top of the prior trend leg the breakout produced (the
+ *                 swing high for a long, the swing low for a short). This is
+ *                 the "prior structure" profit target. When no swing level is
+ *                 available or it sits on the wrong side of entry (e.g. the
+ *                 user flipped the side), it falls back to a risk-multiple
+ *                 target: risk = |entry − stop|; target = entry ± risk ×
+ *                 riskReward (default DEFAULT_RISK_REWARD).
  */
 
 const STORAGE_KEY = 'rally.backtest.v1'
@@ -78,7 +82,16 @@ export interface BacktestPosition {
   distalPrice?: number
   /** ATR at order time, for sizing the stop buffer beyond the distal line. */
   atr?: number
-  /** User-chosen reward-to-risk multiple (2 = 2:1). */
+  /**
+   * Top of the prior trend leg (swing high for a long, swing low for a short),
+   * captured at order time. Anchors the cash-out target. Undefined when the
+   * symbol had no measurable leg after its zone.
+   */
+  swingTarget?: number
+  /**
+   * Reward-to-risk multiple used only for the fallback target when no swing
+   * level applies. Retained for backward compatibility with saved positions.
+   */
   riskReward: number
   /** Number of shares. */
   shares: number
@@ -159,9 +172,9 @@ function todayISO(): string {
 function managedLevels(
   side: TradeSide,
   entry: number,
-  opts: { distal?: number; atr?: number; riskReward: number },
+  opts: { distal?: number; atr?: number; swingTarget?: number; riskReward: number },
 ): { stopLossPrice: number; cashOutPrice: number } {
-  const { distal, atr, riskReward } = opts
+  const { distal, atr, swingTarget, riskReward } = opts
   const buffer = atr && atr > 0 ? atr * DISTAL_STOP_ATR_BUFFER : 0
 
   let stopLossPrice: number
@@ -174,7 +187,13 @@ function managedLevels(
     }
     stopLossPrice = Math.max(0, stopLossPrice)
     const risk = entry - stopLossPrice
-    return { stopLossPrice, cashOutPrice: entry + risk * riskReward }
+    // Target the top of the prior rally leg when it sits above entry; otherwise
+    // fall back to the risk-multiple target (handles side overrides / no zone).
+    const cashOutPrice =
+      swingTarget !== undefined && swingTarget > entry
+        ? swingTarget
+        : entry + risk * riskReward
+    return { stopLossPrice, cashOutPrice }
   }
 
   // Short: stop wants to be above entry. Use the distal line if it's above entry.
@@ -184,7 +203,13 @@ function managedLevels(
     stopLossPrice = entry * (1 + DEFAULT_STOP_LOSS_PCT)
   }
   const risk = stopLossPrice - entry
-  return { stopLossPrice, cashOutPrice: Math.max(0, entry - risk * riskReward) }
+  // Target the bottom of the prior drop leg when it sits below entry; otherwise
+  // fall back to the risk-multiple target.
+  const cashOutPrice =
+    swingTarget !== undefined && swingTarget < entry && swingTarget > 0
+      ? swingTarget
+      : Math.max(0, entry - risk * riskReward)
+  return { stopLossPrice, cashOutPrice }
 }
 
 export interface OpenTradeInput {
@@ -204,7 +229,9 @@ export interface OpenTradeInput {
   distal?: number
   /** ATR at order time, for the distal-stop buffer. */
   atr?: number
-  /** Reward-to-risk multiple the user chose (2 = 2:1). */
+  /** Top of the prior trend leg — anchors the cash-out target. */
+  swingTarget?: number
+  /** Optional fallback reward-to-risk multiple (defaults to DEFAULT_RISK_REWARD). */
   riskReward?: number
 }
 
@@ -243,6 +270,7 @@ export function useBacktestPortfolio() {
         const levels = managedLevels(input.side, limitPrice as number, {
           distal: input.distal,
           atr: input.atr,
+          swingTarget: input.swingTarget,
           riskReward,
         })
         const position: BacktestPosition = {
@@ -258,6 +286,7 @@ export function useBacktestPortfolio() {
           limitPrice: limitPrice as number,
           distalPrice: input.distal,
           atr: input.atr,
+          swingTarget: input.swingTarget,
           riskReward,
           shares,
           ...levels,
@@ -272,6 +301,7 @@ export function useBacktestPortfolio() {
       const levels = managedLevels(input.side, price, {
         distal: input.distal,
         atr: input.atr,
+        swingTarget: input.swingTarget,
         riskReward,
       })
       const position: BacktestPosition = {
@@ -286,6 +316,7 @@ export function useBacktestPortfolio() {
         entryPrice: price,
         distalPrice: input.distal,
         atr: input.atr,
+        swingTarget: input.swingTarget,
         riskReward,
         shares,
         ...levels,
@@ -324,6 +355,7 @@ export function useBacktestPortfolio() {
         const levels = managedLevels(p.side, p.limitPrice, {
           distal: p.distalPrice,
           atr: p.atr,
+          swingTarget: p.swingTarget,
           riskReward: p.riskReward,
         })
         return {

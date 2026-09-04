@@ -21,6 +21,26 @@ function currentPriceFor(symbol: string, stocks: Stock[]): number | null {
   return s ? s.price : null
 }
 
+/**
+ * The trade's actual reward-to-risk, derived from its managed levels rather
+ * than a preset: reward = |cash-out − entry|, risk = |entry − stop|. Uses the
+ * limit price as the entry reference while a limit order is still pending.
+ * Returns null when risk is zero or the reference price is unavailable.
+ */
+function realizedRR(position: BacktestPosition): number | null {
+  const ref = position.entryPrice ?? position.limitPrice
+  if (ref == null || !Number.isFinite(ref)) return null
+  const risk = Math.abs(ref - position.stopLossPrice)
+  const reward = Math.abs(position.cashOutPrice - ref)
+  return risk > 0 ? reward / risk : null
+}
+
+/** Format an R:R ratio for display, e.g. "2.4:1", or a dash when unknown. */
+function formatRR(position: BacktestPosition): string {
+  const rr = realizedRR(position)
+  return rr != null ? `${rr.toFixed(1)}:1` : '—'
+}
+
 function OpenPositionRow({
   position,
   stocks,
@@ -70,7 +90,7 @@ function OpenPositionRow({
         {position.name && position.name !== position.symbol && (
           <span className="bt-name">{position.name}</span>
         )}
-        <span className="bt-shares">{position.shares} sh · {position.orderType} · {position.riskReward}:1</span>
+        <span className="bt-shares">{position.shares} sh · {position.orderType} · {formatRR(position)}</span>
       </div>
 
       <div className="bt-col-num">
@@ -151,7 +171,7 @@ function PendingOrderRow({
         {position.name && position.name !== position.symbol && (
           <span className="bt-name">{position.name}</span>
         )}
-        <span className="bt-shares">{position.shares} sh · limit · {position.riskReward}:1</span>
+        <span className="bt-shares">{position.shares} sh · limit · {formatRR(position)}</span>
       </div>
 
       <div className="bt-col-num">

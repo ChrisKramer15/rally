@@ -2602,7 +2602,7 @@
 /* Level preview (stop / cash-out) */
 .tt-levels {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 10px;
   margin-bottom: 14px;
 }
@@ -2633,6 +2633,7 @@
 }
 .tt-level-stop { color: var(--neon-red); }
 .tt-level-target { color: var(--neon-green); }
+.tt-level-rr { color: var(--neon-cyan); }
 
 .tt-level-note {
   font-size: 11px;

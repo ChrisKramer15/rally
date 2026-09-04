@@ -124,6 +124,16 @@ export function TradeDetailModal({ position, livePrice, onClose }: TradeDetailMo
     return out
   }, [entryPrice, isPending, position.stopLossPrice, position.cashOutPrice])
 
+  // Actual reward-to-risk, derived from the managed levels against the entry
+  // (fill price, or the resting limit while pending).
+  const rrLabel = useMemo(() => {
+    if (entryPrice === null || !Number.isFinite(entryPrice)) return null
+    const risk = Math.abs(entryPrice - position.stopLossPrice)
+    const reward = Math.abs(position.cashOutPrice - entryPrice)
+    if (risk <= 0) return null
+    return `${(reward / risk).toFixed(1)}:1`
+  }, [entryPrice, position.stopLossPrice, position.cashOutPrice])
+
   const chartBars = useMemo(() => bars.slice(-RANGE_BARS), [bars])
 
   return (
@@ -173,7 +183,7 @@ export function TradeDetailModal({ position, livePrice, onClose }: TradeDetailMo
             </span>
           ))}
           <span className="tl-legend-meta">
-            {position.shares} sh · {position.riskReward}:1 R · {position.orderType}
+            {position.shares} sh{rrLabel ? ` · ${rrLabel} R` : ''} · {position.orderType}
           </span>
         </div>
 

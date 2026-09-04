@@ -84,11 +84,12 @@ function App() {
   //   • proximal → seeds the limit-order price (the entry line)
   //   • distal   → anchors the stop just beyond the zone's far edge
   //   • atr      → sizes the stop buffer beyond the distal line
+  //   • swingTarget → top of the last trend leg; seeds the cash-out target
   // Computed from the local daily-bar cache (same source the zones hook uses).
   //   • kind     → the signal's direction: a demand zone (explosive up move)
   //                defaults the ticket to Long; a supply zone (down move) to
   //                Short. The user can still override in the ticket.
-  const tradeZone = useMemo<{ proximal: number; distal: number; atr?: number; side: TradeSide } | null>(() => {
+  const tradeZone = useMemo<{ proximal: number; distal: number; atr?: number; side: TradeSide; swingTarget?: number } | null>(() => {
     if (!tradeSymbol) return null
     const cached = loadCached([tradeSymbol])[tradeSymbol]
     if (!cached || cached.bars.length === 0) return null
@@ -100,6 +101,7 @@ function App() {
       distal: latest.distal,
       atr: atrFromBars(cached.bars),
       side: latest.kind === 'supply' ? 'short' : 'long',
+      swingTarget: latest.swingTarget ?? undefined,
     }
   }, [tradeSymbol])
 
@@ -116,7 +118,7 @@ function App() {
       limitPrice: ticket.limitPrice,
       distal: tradeZone?.distal,
       atr: tradeZone?.atr,
-      riskReward: ticket.riskReward,
+      swingTarget: tradeZone?.swingTarget,
     })
     setTradeSymbol(null)
     setView('backtest')
@@ -297,6 +299,7 @@ function App() {
           proximal={tradeZone?.proximal ?? null}
           distal={tradeZone?.distal ?? null}
           atr={tradeZone?.atr ?? null}
+          swingTarget={tradeZone?.swingTarget ?? null}
           defaultSide={tradeZone?.side ?? 'long'}
           onSubmit={handleSubmitTicket}
           onClose={() => setTradeSymbol(null)}

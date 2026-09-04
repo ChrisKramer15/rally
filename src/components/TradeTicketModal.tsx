@@ -8,11 +8,8 @@ export interface TradeTicket {
   orderType: OrderType
   /** Only meaningful for limit orders. */
   limitPrice?: number
-  /** User-chosen reward-to-risk multiple (2 = 2:1). */
-  riskReward: number
 }
 
-const RR_OPTIONS = [1, 1.5, 2, 3, 4] as const
 const STOP_BUFFER_ATR = 0.1
 const FALLBACK_STOP_PCT = 0.08
 
@@ -33,6 +30,12 @@ interface TradeTicketModalProps {
   /** ATR at order time — sizes the stop buffer beyond the distal line. */
   atr?: number | null
   /**
+   * Top of the prior trend leg (swing high for a demand/long zone, swing low
+   * for a supply/short zone). Anchors the cash-out target. When absent or on
+   * the wrong side of entry, the preview falls back to a risk-multiple target.
+   */
+  swingTarget?: number | null
+  /**
    * Default side seeded from the signal's direction: an up move (demand zone)
    * → 'long', a down move (supply zone) → 'short'. The user can still override.
    */
@@ -49,6 +52,7 @@ export function TradeTicketModal({
   proximal,
   distal,
   atr,
+  swingTarget,
   defaultSide = 'long',
   onSubmit,
   onClose,
@@ -61,7 +65,6 @@ export function TradeTicketModal({
   const defaultShares = Math.max(1, Math.floor((budget * 0.1) / (price || 1)))
   const [sharesInput, setSharesInput] = useState<string>(String(defaultShares))
   const [orderType, setOrderType] = useState<OrderType>('market')
-  const [riskReward, setRiskReward] = useState<number>(DEFAULT_RISK_REWARD)
 
   const hasProximal = proximal != null && Number.isFinite(proximal) && proximal > 0
   const defaultLimit = hasProximal ? (proximal as number) : price
@@ -79,22 +82,38 @@ export function TradeTicketModal({
   const estCost = shares * entry
 
   // Preview the stop + target the position will get, mirroring managedLevels in
-  // the portfolio hook so the ticket shows what you're committing to.
+  // the portfolio hook so the ticket shows what you're committing to. The
+  // cash-out is anchored to the prior trend leg (swingTarget) when it sits on
+  // the profit side of entry; otherwise it falls back to a risk-multiple
+  // target. The reward-to-risk ratio is derived from the resulting levels and
+  // shown read-only — the user no longer picks it.
   const preview = useMemo(() => {
     if (!(entry > 0)) return null
     const buffer = atr && atr > 0 ? atr * STOP_BUFFER_ATR : 0
     const distalNum = distal != null && Number.isFinite(distal) ? (distal as number) : undefined
+    const swing = swingTarget != null && Number.isFinite(swingTarget) ? (swingTarget as number) : undefined
+
     let stop: number
+    let target: number
+    let usedSwing: boolean
     if (side === 'long') {
       stop = distalNum !== undefined && distalNum < entry ? distalNum - buffer : entry * (1 - FALLBACK_STOP_PCT)
       stop = Math.max(0, stop)
       const risk = entry - stop
-      return { stop, target: entry + risk * riskReward, usedDistal: distalNum !== undefined && distalNum < entry }
+      usedSwing = swing !== undefined && swing > entry
+      target = usedSwing ? (swing as number) : entry + risk * DEFAULT_RISK_REWARD
+      const reward = target - entry
+      const ratio = risk > 0 ? reward / risk : null
+      return { stop, target, ratio, usedDistal: distalNum !== undefined && distalNum < entry, usedSwing }
     }
     stop = distalNum !== undefined && distalNum > entry ? distalNum + buffer : entry * (1 + FALLBACK_STOP_PCT)
     const risk = stop - entry
-    return { stop, target: Math.max(0, entry - risk * riskReward), usedDistal: distalNum !== undefined && distalNum > entry }
-  }, [side, entry, distal, atr, riskReward])
+    usedSwing = swing !== undefined && swing < entry && swing > 0
+    target = usedSwing ? (swing as number) : Math.max(0, entry - risk * DEFAULT_RISK_REWARD)
+    const reward = entry - target
+    const ratio = risk > 0 ? reward / risk : null
+    return { stop, target, ratio, usedDistal: distalNum !== undefined && distalNum > entry, usedSwing }
+  }, [side, entry, distal, atr, swingTarget])
 
   const canSubmit =
     shares >= 1 &&
@@ -113,7 +132,6 @@ export function TradeTicketModal({
       shares,
       orderType,
       limitPrice: orderType === 'limit' ? limitPrice : undefined,
-      riskReward,
     })
   }
 
@@ -227,24 +245,6 @@ export function TradeTicketModal({
           </div>
         )}
 
-        {/* ── Risk : reward ── */}
-        <div className="tt-field">
-          <span className="tt-field-label">Reward : risk</span>
-          <div className="tt-seg" role="group" aria-label="Reward to risk ratio">
-            {RR_OPTIONS.map((r) => (
-              <button
-                key={r}
-                type="button"
-                className={`tt-seg-btn ${riskReward === r ? 'active' : ''}`}
-                onClick={() => setRiskReward(r)}
-                aria-pressed={riskReward === r}
-              >
-                {r % 1 === 0 ? `${r}:1` : `${r}:1`}
-              </button>
-            ))}
-          </div>
-        </div>
-
         {/* ── Level preview ── */}
         {preview && (
           <div className="tt-levels">
@@ -258,7 +258,16 @@ export function TradeTicketModal({
             <div className="tt-level">
               <span className="tt-level-label">Cash-out</span>
               <span className="tt-level-val tt-level-target">${formatCurrency(preview.target)}</span>
-              <span className="tt-level-note">{riskReward}:1 target</span>
+              <span className="tt-level-note">
+                {preview.usedSwing ? 'top of last trend leg' : `${DEFAULT_RISK_REWARD}:1 (no swing level)`}
+              </span>
+            </div>
+            <div className="tt-level">
+              <span className="tt-level-label">Reward : risk</span>
+              <span className="tt-level-val tt-level-rr">
+                {preview.ratio != null ? `${preview.ratio.toFixed(1)}:1` : '—'}
+              </span>
+              <span className="tt-level-note">computed from levels</span>
             </div>
           </div>
         )}

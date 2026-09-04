@@ -35,6 +35,14 @@ export interface BasingZone {
   proximal: number
   /** Line furthest from current price. Sits on the wick extreme. */
   distal: number
+  /**
+   * Top of the previous trend leg the move produced after breaking out of the
+   * base — the swing high for a demand zone, the swing low for a supply zone.
+   * This is the conventional profit target ("prior swing structure"): sell into
+   * the peak the last rally reached (long) or cover into the trough the last
+   * drop reached (short). Null when no completed leg could be measured.
+   */
+  swingTarget: number | null
   /** Zone height (proximal→distal) as % of the distal price. */
   baseHeightPct: number
   /** Number of basing candles (1 = single-candle base). */
@@ -89,6 +97,23 @@ const PRIOR_MOVE_RANGE_MULT = 2.0
 const TIGHT_LIMIT_MULT = 1.5
 /** Number of bars before the base used for the "volume dried up" comparison. */
 const PRIOR_VOL_WINDOW = 10
+/**
+ * Swing-target sensitivity: a pullback of this many ATRs off the running
+ * extreme ends the trend leg when measuring the cash-out target. It's a noise
+ * filter that decides how big a dip counts as "the rally ended," so we target
+ * the top of the FIRST leg rather than the furthest extreme of a multi-leg run.
+ *
+ * Backtest-tunable knob — trade-off:
+ *   • Lower (≈1.0) → legs end sooner → nearer, more conservative targets.
+ *                    Risk: a single average-range down day ends the leg early.
+ *   • 1.5 (default) → matches the rest of the strategy's ATR bands
+ *                    (TIGHT_LIMIT_MULT = 1.5, explosive move = 2.0), so a real
+ *                    reversal trips it but normal daily wiggle doesn't.
+ *   • Higher (≈2.0) → skips minor reversals → farther targets that can drift
+ *                    toward capturing later legs.
+ * Sweep 1.0 / 1.5 / 2.0 on your watchlist and keep the best expectancy.
+ */
+const SWING_PULLBACK_ATR = 1.5
 
 /**
  * Wilder-style ATR over the `period` bars ending at (and excluding) `endIdx`.
@@ -137,6 +162,51 @@ function gradeZone(z: {
 
 function clamp01(n: number): number {
   return Math.max(0, Math.min(1, n))
+}
+
+/**
+ * Measure the top of the FIRST trend leg after the base broke out — the swing
+ * high (demand) or swing low (supply). Walks forward from the explosive candle,
+ * tracking the running extreme in the trend direction, and ends the leg once
+ * price pulls back off that extreme by SWING_PULLBACK_ATR (a real reversal, not
+ * noise). Returns the extreme price of that leg, or null if there aren't enough
+ * bars after the breakout to measure one.
+ */
+function swingTargetAfter(
+  bars: DailyBar[],
+  explosiveIdx: number,
+  kind: ZoneKind,
+  atr: number,
+): number | null {
+  if (atr <= 0) return null
+  const pullback = SWING_PULLBACK_ATR * atr
+  let extreme: number | null = null
+
+  for (let k = explosiveIdx; k < bars.length; k++) {
+    const b = bars[k]
+    if (kind === 'demand') {
+      // Rally leg: track the highest high; end it once price falls `pullback`
+      // below that high (the leg rolled over).
+      if (extreme === null || b.high > extreme) {
+        extreme = b.high
+      } else if (extreme - b.low >= pullback) {
+        return extreme
+      }
+    } else {
+      // Drop leg: track the lowest low; end it once price rises `pullback`
+      // above that low.
+      if (extreme === null || b.low < extreme) {
+        extreme = b.low
+      } else if (b.high - extreme >= pullback) {
+        return extreme
+      }
+    }
+  }
+
+  // No pullback found — the leg is still the last extreme we saw. Only report a
+  // target once we've moved past the explosive candle itself (at least one bar
+  // after breakout), otherwise there's no completed leg to speak of yet.
+  return explosiveIdx < bars.length - 1 ? extreme : null
 }
 
 /**
@@ -239,11 +309,15 @@ function detectBase(
     }
   }
 
+  // Profit target: the top of the trend leg the breakout produced.
+  const swingTarget = swingTargetAfter(bars, explosiveIdx, kind, atr)
+
   return {
     symbol,
     kind,
     proximal,
     distal,
+    swingTarget,
     baseHeightPct,
     candleCount,
     startDate: bars[startIdx].date,
