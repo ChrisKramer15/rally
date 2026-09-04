@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { usePipelineRuns } from '../hooks/usePipelineRuns'
-import type { PipelineRun, PipelineStatus } from '../data/pipelineStore'
+import type { PipelineRun, PipelineStage, PipelineStatus, StageStatus } from '../data/pipelineStore'
 
 /** Human-readable relative + absolute timestamp. */
 function formatWhen(iso: string): string {
@@ -30,12 +30,42 @@ function StatusPill({ status }: { status: PipelineStatus }) {
   return <span className={`pipe-pill pipe-${status}`}>{STATUS_LABEL[status]}</span>
 }
 
-/** One run row with an expandable detail drawer (per-symbol + errors). */
+const STAGE_LABEL: Record<string, string> = {
+  resolve: 'Resolve',
+  fetch: 'Fetch',
+  upsert: 'Upsert',
+}
+
+/** The stage timeline: resolve -> fetch -> upsert, each with its own status. */
+function StageTimeline({ stages }: { stages: PipelineStage[] }) {
+  if (stages.length === 0) return null
+  return (
+    <div className="pipe-detail-block">
+      <h4>Stages</h4>
+      <ol className="pipe-stage-list">
+        {stages.map((s, i) => (
+          <li key={`${s.stage}-${i}`} className={`pipe-stage pipe-stage-${s.status as StageStatus}`}>
+            <span className="pipe-stage-dot" />
+            <span className="pipe-stage-name">{STAGE_LABEL[s.stage] ?? s.stage}</span>
+            <span className="pipe-stage-detail">{s.detail}</span>
+            <span className="pipe-stage-ms">{formatDuration(s.ms)}</span>
+          </li>
+        ))}
+      </ol>
+    </div>
+  )
+}
+
+/** One run row with an expandable detail drawer (stages + per-symbol + errors). */
 function RunRow({ run }: { run: PipelineRun }) {
   const [open, setOpen] = useState(false)
   const errorEntries = Object.entries(run.errors)
   const symbolEntries = Object.entries(run.perSymbol)
-  const hasDetail = errorEntries.length > 0 || symbolEntries.length > 0 || Boolean(run.message)
+  const hasDetail =
+    run.stages.length > 0 ||
+    errorEntries.length > 0 ||
+    symbolEntries.length > 0 ||
+    Boolean(run.message)
 
   return (
     <li className="pipe-run">
@@ -47,12 +77,20 @@ function RunRow({ run }: { run: PipelineRun }) {
       >
         <StatusPill status={run.status} />
         <span className="pipe-run-when">{formatWhen(run.startedAt)}</span>
-        <span className="pipe-run-trigger">{run.trigger}</span>
+        <span className="pipe-run-list-name" title={`Trigger: ${run.trigger}`}>
+          {run.watchlistName ?? '—'}
+          {run.mode && run.mode !== 'primary' && (
+            <span className={`pipe-mode pipe-mode-${run.mode}`}>{run.mode}</span>
+          )}
+        </span>
         <span className="pipe-run-stat">
           <span className="pipe-metric">{run.barsCollected}</span> bars
         </span>
         <span className="pipe-run-stat">
           <span className="pipe-metric">{run.symbolsTotal}</span> symbols
+        </span>
+        <span className={`pipe-run-stat ${run.symbolsSkipped > 0 ? 'muted' : ''}`}>
+          <span className="pipe-metric">{run.symbolsSkipped}</span> skipped
         </span>
         <span className={`pipe-run-stat ${run.symbolsFailed > 0 ? 'down' : ''}`}>
           <span className="pipe-metric">{run.symbolsFailed}</span> failed
@@ -64,6 +102,8 @@ function RunRow({ run }: { run: PipelineRun }) {
       {open && (
         <div className="pipe-run-detail">
           {run.message && <p className="pipe-run-message">{run.message}</p>}
+
+          <StageTimeline stages={run.stages} />
 
           {errorEntries.length > 0 && (
             <div className="pipe-detail-block">
@@ -106,6 +146,20 @@ function RunRow({ run }: { run: PipelineRun }) {
  */
 export function DataPipeline() {
   const { runs, summary, status, error, refresh } = usePipelineRuns()
+  const [listFilter, setListFilter] = useState<string>('all')
+
+  // Distinct watchlist names seen in the loaded runs, for the filter dropdown.
+  const listNames = useMemo(() => {
+    const names = new Set<string>()
+    for (const r of runs) if (r.watchlistName) names.add(r.watchlistName)
+    return Array.from(names).sort()
+  }, [runs])
+
+  const filteredRuns = useMemo(() => {
+    if (listFilter === 'all') return runs
+    if (listFilter === '__none') return runs.filter((r) => !r.watchlistName)
+    return runs.filter((r) => r.watchlistName === listFilter)
+  }, [runs, listFilter])
 
   return (
     <div className="pipe-page">
@@ -148,6 +202,22 @@ export function DataPipeline() {
         <div className="panel-head">
           <h2>Run Log</h2>
           <div className="panel-head-actions">
+            {listNames.length > 0 && (
+              <select
+                className="pipe-filter"
+                value={listFilter}
+                onChange={(e) => setListFilter(e.target.value)}
+                aria-label="Filter runs by watchlist"
+              >
+                <option value="all">All lists</option>
+                {listNames.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+                <option value="__none">Unattributed</option>
+              </select>
+            )}
             <span className="panel-sub">collect-daily-bars</span>
             <button
               type="button"
@@ -186,18 +256,22 @@ export function DataPipeline() {
             <div className="pipe-log-head">
               <span>Status</span>
               <span>When</span>
-              <span>Trigger</span>
+              <span>List</span>
               <span>Bars</span>
               <span>Symbols</span>
+              <span>Skipped</span>
               <span>Failed</span>
               <span>Duration</span>
               <span />
             </div>
             <ul className="pipe-run-list">
-              {runs.map((run) => (
+              {filteredRuns.map((run) => (
                 <RunRow key={run.id} run={run} />
               ))}
             </ul>
+            {filteredRuns.length === 0 && (
+              <div className="pipe-empty">No runs for this list yet.</div>
+            )}
           </>
         )}
       </section>

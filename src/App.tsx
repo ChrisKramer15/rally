@@ -44,11 +44,24 @@ function App() {
   // Index cards: real daily data via ETF proxies (SPY/QQQ/DIA) from Supabase.
   const { indices } = useIndexMarket()
 
-  // Watchlist symbols are user-defined (pasted from a scanner) and persisted.
-  const { symbols, setSymbols } = useWatchlist()
+  // Named watchlists (up to 10), user-defined and persisted. The feed/Signals/
+  // Backtest all operate on the de-duplicated UNION across every list; the
+  // editor edits one list at a time.
+  const {
+    lists,
+    activeList,
+    activeId,
+    unionSymbols,
+    canAddList,
+    selectList,
+    saveActiveSymbols,
+    addList,
+    renameList,
+    removeList,
+  } = useWatchlist()
 
   // Daily watchlist data from Tiingo, cached per trading day; simulated when no key is set.
-  const { stocks, flash, lastUpdated, status, error, usage } = useWatchlistMarket(symbols)
+  const { stocks, flash, lastUpdated, status, error, usage } = useWatchlistMarket(unionSymbols)
 
   // Paper-trading portfolio for the Backtest page (persisted to localStorage).
   const portfolio = useBacktestPortfolio()
@@ -234,7 +247,19 @@ function App() {
               stocks={stocks}
               flash={flash}
               onSelectSymbol={setSelectedSymbol}
-              action={<WatchlistEditor symbols={symbols} onSave={setSymbols} />}
+              action={
+                <WatchlistEditor
+                  lists={lists}
+                  activeList={activeList}
+                  activeId={activeId}
+                  canAddList={canAddList}
+                  onSelectList={selectList}
+                  onSaveSymbols={saveActiveSymbols}
+                  onAddList={addList}
+                  onRenameList={renameList}
+                  onRemoveList={removeList}
+                />
+              }
             />
             <Movers stocks={stocks} />
           </section>

@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useExplosiveMoves, type ExplosiveMove, type ExplosiveGrade } from '../hooks/useExplosiveMoves'
+import { useBasingZones } from '../hooks/useBasingZones'
 import { formatCurrency, type Stock } from '../data/stocks'
 import { TickerDetailModal } from './TickerDetailModal'
 
@@ -198,11 +199,28 @@ export function ExplosiveMoves({ stocks, status, onTrade }: ExplosiveMovesProps)
     freshnessDays,
   )
 
-  // The Signals page is about *actionable* signals, so it lists only symbols
-  // whose most recent explosive move is within the freshness window. Stale
-  // moves still exist in history (and show on the chart, dimmed) — they're just
-  // not surfaced here as live signals.
-  const moves = allMoves.filter((m) => m.latest.isFresh)
+  // Most recent supply/demand zone per symbol (same move threshold as signals),
+  // used to keep only signals backed by a fresh, tradeable zone.
+  const { zones } = useBasingZones(stocks, moveMultiple)
+  const zoneBySymbol = useMemo(
+    () => new Map(zones.map((z) => [z.symbol, z])),
+    [zones],
+  )
+
+  // The Signals page is about *actionable* signals. A signal is only tradeable
+  // under the supply/demand method when it has a real zone — a base plus an
+  // explosive move away — that hasn't been used yet. So a signal is shown only
+  // when all of the following hold:
+  //   • its most recent explosive move is within the freshness window
+  //   • it has a qualifying supply/demand zone (an explosive move with no base
+  //     is support/resistance, not a zone — nothing to place an entry against)
+  //   • that zone is still fresh (not mitigated): price hasn't returned to the
+  //     proximal line, so the first-touch entry is still available
+  const moves = allMoves.filter((m) => {
+    if (!m.latest.isFresh) return false
+    const zone = zoneBySymbol.get(m.symbol)
+    return zone != null && !zone.mitigated
+  })
 
   const selectedStock: Stock | null = selectedSymbol
     ? (stocks.find((s) => s.symbol === selectedSymbol) ?? null)
@@ -221,7 +239,16 @@ export function ExplosiveMoves({ stocks, status, onTrade }: ExplosiveMovesProps)
 
   const aplusCount  = moves.filter((m) => m.latest.grade === 'A+').length
   const strongCount = moves.length - aplusCount
-  const staleHidden = allMoves.length - moves.length
+  // Fresh moves hidden purely because their move fell outside the freshness window.
+  const staleHidden = allMoves.filter((m) => !m.latest.isFresh).length
+  // Fresh moves hidden because they lack a tradeable zone: either no qualifying
+  // supply/demand zone at all (bare move = support/resistance), or the zone is
+  // already used (mitigated). Both mean there's no fresh entry to trade.
+  const noFreshZoneHidden = allMoves.filter((m) => {
+    if (!m.latest.isFresh) return false
+    const zone = zoneBySymbol.get(m.symbol)
+    return zone == null || zone.mitigated
+  }).length
 
   return (
     <div className="em-page">
@@ -231,7 +258,7 @@ export function ExplosiveMoves({ stocks, status, onTrade }: ExplosiveMovesProps)
           <h2>Explosive Moves</h2>
           <p className="em-subtitle">
             Fresh signals: a ≥{moveMultiple}× ATR move with ≥60% body in the last {freshnessDays} trading
-            days. Orange = A+ (clean body + volume surge).
+            days, backed by a fresh (unused) supply/demand zone. Orange = A+ (clean body + volume surge).
           </p>
         </div>
 
@@ -297,6 +324,14 @@ export function ExplosiveMoves({ stocks, status, onTrade }: ExplosiveMovesProps)
               title={`${staleHidden} symbol(s) had explosive moves, but only older than the ${freshnessDays}-day window`}
             >
               · {staleHidden} stale
+            </span>
+          )}
+          {noFreshZoneHidden > 0 && (
+            <span
+              className="em-skipped"
+              title={`${noFreshZoneHidden} fresh move(s) hidden — no fresh supply/demand zone to trade (either no qualifying base, or the zone is already used)`}
+            >
+              · {noFreshZoneHidden} no fresh zone
             </span>
           )}
           {(skippedCount > 0 || uncachedCount > 0) && (

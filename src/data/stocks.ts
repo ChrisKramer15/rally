@@ -107,10 +107,17 @@ export const INDEX_PROXIES: IndexProxy[] = [
 /** The ETF proxy symbols the index cards track. */
 export const INDEX_PROXY_SYMBOLS: string[] = INDEX_PROXIES.map((p) => p.symbol)
 
-// Maximum number of tickers the watchlist (Tier 1) will track. A daily pull is
-// one Tiingo request per symbol; 40 fits comfortably in a single hourly window
-// (free tier ~50/hr) and barely touches the 500-unique-symbols/month cap.
+// Maximum number of tickers a SINGLE watchlist will track. A daily pull is one
+// Tiingo request per symbol; 40 fits comfortably in a single hourly window
+// (free tier ~50/hr). Each list collects in its own staggered hour, so 40/list
+// keeps every list under the per-hour cap.
 export const MAX_WATCHLIST = 40
+
+// Maximum number of named watchlists. Each list gets its own staggered nightly
+// collection slot (slot 1..10). 10 lists × 40 symbols = up to 400 distinct
+// symbols, under Tiingo's 500-unique-symbols/month cap (a symbol lives in
+// exactly one list, so lists never double-count a symbol).
+export const MAX_WATCHLISTS = 10
 
 /** Default watchlist symbols, derived from the seed stocks. */
 export const DEFAULT_SYMBOLS: string[] = INITIAL_STOCKS.map((s) => s.symbol)

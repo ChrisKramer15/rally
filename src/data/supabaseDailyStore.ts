@@ -53,87 +53,183 @@ export async function fetchDailyBarsFromSupabase(symbol: string): Promise<DailyB
   return bars
 }
 
-/** A watchlist entry as stored in Supabase (browser-visible columns). */
+/** A watchlist symbol entry as stored in Supabase (browser-visible columns). */
 export interface WatchlistEntry {
   symbol: string
   name?: string
 }
 
+/** A named watchlist (the parent list). */
+export interface WatchlistMeta {
+  id: string
+  name: string
+  /** 1..10 — drives the staggered nightly collection time. */
+  slot: number
+}
+
+/** A named list plus its active symbols, as hydrated for the client. */
+export interface WatchlistWithSymbols extends WatchlistMeta {
+  symbols: string[]
+}
+
 /**
- * Read the ACTIVE watchlist from Supabase — the shared source of truth every
- * device converges on. Returns entries oldest-added first so the list order is
- * stable across devices. Returns [] when unconfigured or on error (callers fall
- * back to their local list).
+ * Read all watchlist metadata rows (id, name, slot), ordered by slot so the UI
+ * shows lists in a stable order. Returns [] when unconfigured or on error.
  */
-export async function fetchWatchlist(): Promise<WatchlistEntry[]> {
+export async function fetchWatchlists(): Promise<WatchlistMeta[]> {
   const supabase = getSupabase()
   if (!supabase) return []
 
   const { data, error } = await supabase
-    .from('watchlist')
-    .select('symbol,name')
+    .from('watchlists')
+    .select('id,name,slot')
     .eq('active', true)
-    .order('added_at', { ascending: true })
+    .order('slot', { ascending: true })
 
   if (error) {
-    console.warn(`Watchlist read skipped: ${error.message}`)
+    console.warn(`Watchlists read skipped: ${error.message}`)
     return []
   }
   return (data ?? []).map((r) => {
-    const row = r as { symbol: string; name: string | null }
-    return { symbol: row.symbol, name: row.name ?? undefined }
+    const row = r as { id: string; name: string; slot: number }
+    return { id: row.id, name: row.name, slot: row.slot }
   })
 }
 
 /**
- * Reconcile the shared watchlist so the collector only pulls symbols that are
- * CURRENTLY on the user's list.
- *
- * Two-way sync against `public.watchlist`:
- *   1. Upsert every current symbol with active=true — inserts new tickers and
- *      REACTIVATES any that were previously removed (a returning symbol keeps
- *      its row, added_at, and price history).
- *   2. Deactivate (active=false) any rows that are active in the table but no
- *      longer in the current list — a soft delete that stops the collector from
- *      pulling them without discarding their history.
- *
- * Best-effort and non-blocking: a failure here must never break the local
- * watchlist save. No-op when Supabase is unconfigured.
- *
- * Returns the symbols that were newly inserted (useful for kicking an immediate
- * collect), or [] when nothing was added / Supabase is off.
+ * Read every list WITH its active symbols in one pass. Symbols are grouped by
+ * `watchlist_id`; because a symbol belongs to exactly one list, no symbol
+ * appears in two lists. Ordered oldest-added-first within each list so order is
+ * stable across devices. Returns [] when unconfigured.
  */
-export async function syncWatchlist(symbols: string[]): Promise<string[]> {
+export async function fetchWatchlistsWithSymbols(): Promise<WatchlistWithSymbols[]> {
+  const supabase = getSupabase()
+  if (!supabase) return []
+
+  const lists = await fetchWatchlists()
+  if (lists.length === 0) return []
+
+  const { data, error } = await supabase
+    .from('watchlist')
+    .select('symbol,watchlist_id')
+    .eq('active', true)
+    .order('added_at', { ascending: true })
+
+  if (error) {
+    console.warn(`Watchlist symbols read skipped: ${error.message}`)
+    return lists.map((l) => ({ ...l, symbols: [] }))
+  }
+
+  const byList = new Map<string, string[]>()
+  for (const r of data ?? []) {
+    const row = r as { symbol: string; watchlist_id: string | null }
+    if (!row.watchlist_id) continue
+    const arr = byList.get(row.watchlist_id) ?? []
+    arr.push(row.symbol)
+    byList.set(row.watchlist_id, arr)
+  }
+
+  return lists.map((l) => ({ ...l, symbols: byList.get(l.id) ?? [] }))
+}
+
+/**
+ * Create a new named list in the first free slot (1..10). Returns the created
+ * list, or null if all slots are taken / Supabase is off. The DB trigger also
+ * (re)schedules this list's cron jobs.
+ */
+export async function createWatchlist(name: string): Promise<WatchlistMeta | null> {
+  const supabase = getSupabase()
+  if (!supabase) return null
+
+  const existing = await fetchWatchlists()
+  const used = new Set(existing.map((l) => l.slot))
+  let slot = 0
+  for (let s = 1; s <= 10; s++) {
+    if (!used.has(s)) {
+      slot = s
+      break
+    }
+  }
+  if (slot === 0) {
+    console.warn('Cannot create watchlist: all 10 slots are in use.')
+    return null
+  }
+
+  const { data, error } = await supabase
+    .from('watchlists')
+    .insert({ name, slot })
+    .select('id,name,slot')
+    .maybeSingle()
+  if (error || !data) {
+    console.warn(`Create watchlist failed: ${error?.message ?? 'no row returned'}`)
+    return null
+  }
+  const row = data as { id: string; name: string; slot: number }
+  return { id: row.id, name: row.name, slot: row.slot }
+}
+
+/** Rename a list. Best-effort; no-op when Supabase is off. */
+export async function renameWatchlist(id: string, name: string): Promise<void> {
+  const supabase = getSupabase()
+  if (!supabase) return
+  const { error } = await supabase.from('watchlists').update({ name }).eq('id', id)
+  if (error) console.warn(`Rename watchlist failed: ${error.message}`)
+}
+
+/**
+ * Delete a list. The `watchlist` FK is ON DELETE CASCADE, so the list's symbol
+ * rows go with it, and the DB trigger reschedules cron. Best-effort.
+ */
+export async function deleteWatchlist(id: string): Promise<void> {
+  const supabase = getSupabase()
+  if (!supabase) return
+  const { error } = await supabase.from('watchlists').delete().eq('id', id)
+  if (error) console.warn(`Delete watchlist failed: ${error.message}`)
+}
+
+/**
+ * Reconcile ONE list's symbols so the collector pulls exactly the current set
+ * for that list. Scoped strictly to `listId`:
+ *   1. Upsert every current symbol with active=true + watchlist_id=listId.
+ *      A symbol belongs to exactly one list, so re-adding a symbol that lived
+ *      in another list simply moves it here (onConflict on symbol updates the
+ *      owning list).
+ *   2. Deactivate rows that are active AND owned by THIS list but no longer in
+ *      the current set. Other lists' symbols are never touched.
+ *
+ * Best-effort and non-blocking. Returns the symbols that were upserted, or []
+ * when nothing changed / Supabase is off.
+ */
+export async function syncWatchlistList(listId: string, symbols: string[]): Promise<string[]> {
   const supabase = getSupabase()
   if (!supabase) return []
 
   const wanted = new Set(symbols)
 
-  // 1) Upsert current symbols as active. onConflict updates the active flag so a
-  //    previously-removed symbol is reactivated; new symbols are inserted.
-  let inserted: string[] = []
+  // 1) Upsert current symbols as active + owned by this list.
+  let upserted: string[] = []
   if (symbols.length > 0) {
-    const rows = symbols.map((symbol) => ({ symbol, active: true }))
+    const rows = symbols.map((symbol) => ({ symbol, active: true, watchlist_id: listId }))
     const { data, error } = await supabase
       .from('watchlist')
       .upsert(rows, { onConflict: 'symbol' })
       .select('symbol')
     if (error) {
-      // Advisory only — surface in console but don't throw into the save path.
       console.warn(`Watchlist sync (activate) skipped: ${error.message}`)
     } else {
-      inserted = (data ?? []).map((r) => (r as { symbol: string }).symbol)
+      upserted = (data ?? []).map((r) => (r as { symbol: string }).symbol)
     }
   }
 
-  // 2) Deactivate anything still active in the table but no longer wanted.
+  // 2) Deactivate anything active in THIS list but no longer wanted.
   const { data: activeRows, error: readErr } = await supabase
     .from('watchlist')
     .select('symbol')
     .eq('active', true)
+    .eq('watchlist_id', listId)
   if (readErr) {
     console.warn(`Watchlist sync (read active) skipped: ${readErr.message}`)
-    return inserted
+    return upserted
   }
   const toDeactivate = (activeRows ?? [])
     .map((r) => (r as { symbol: string }).symbol)
@@ -144,12 +240,13 @@ export async function syncWatchlist(symbols: string[]): Promise<string[]> {
       .from('watchlist')
       .update({ active: false })
       .in('symbol', toDeactivate)
+      .eq('watchlist_id', listId)
     if (deErr) {
       console.warn(`Watchlist sync (deactivate) skipped: ${deErr.message}`)
     }
   }
 
-  return inserted
+  return upserted
 }
 
 /**

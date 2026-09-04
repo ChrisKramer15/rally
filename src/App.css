@@ -589,6 +589,144 @@
   cursor: not-allowed;
   box-shadow: none;
 }
+.wl-btn.danger {
+  background: transparent;
+  color: var(--neon-red);
+  border-color: rgba(255, 71, 87, 0.4);
+}
+.wl-btn.danger:hover:not(:disabled) {
+  background: rgba(255, 71, 87, 0.12);
+}
+.wl-btn.danger:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* ---------- Multi-watchlist manager ---------- */
+.wl-modal-wide {
+  max-width: 720px;
+}
+.wl-manager {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: 16px;
+}
+.wl-list-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-right: 1px solid var(--panel-border);
+  padding-right: 14px;
+}
+.wl-list-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.wl-list-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 13px;
+  text-align: left;
+}
+.wl-list-item:hover {
+  color: var(--text-h);
+  background: rgba(255, 255, 255, 0.03);
+}
+.wl-list-item.active {
+  color: var(--text-h);
+  border-color: var(--neon-purple);
+  background: rgba(157, 78, 221, 0.12);
+}
+.wl-list-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wl-list-count {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 5px;
+  padding: 1px 6px;
+}
+.wl-add-list {
+  width: 100%;
+  font-size: 12px;
+}
+.wl-list-editor {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.wl-list-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+  min-height: 34px;
+}
+.wl-list-editor-head h4 {
+  margin: 0;
+  font-size: 15px;
+  color: var(--text-h);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wl-list-editor-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.wl-rename-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+.wl-name-input {
+  flex: 1;
+  font-family: var(--sans);
+  font-size: 14px;
+  color: var(--text-h);
+  background: var(--bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  outline: none;
+}
+.wl-name-input:focus {
+  border-color: var(--neon-purple);
+  box-shadow: var(--glow);
+}
+@media (max-width: 640px) {
+  .wl-manager {
+    grid-template-columns: 1fr;
+  }
+  .wl-list-rail {
+    border-right: none;
+    border-bottom: 1px solid var(--panel-border);
+    padding-right: 0;
+    padding-bottom: 12px;
+  }
+}
 
 /* ---------- Feed status pill ---------- */
 .feed-status {
@@ -771,7 +909,7 @@
 .pipe-log-head,
 .pipe-run-head {
   display: grid;
-  grid-template-columns: 90px 1.6fr 0.9fr 0.8fr 0.9fr 0.8fr 0.8fr 24px;
+  grid-template-columns: 90px 1.5fr 1.1fr 0.8fr 0.9fr 0.8fr 0.8fr 0.8fr 24px;
   align-items: center;
   gap: 10px;
 }
@@ -946,11 +1084,103 @@
     grid-template-columns: 80px 1fr 24px;
     grid-auto-rows: auto;
   }
-  .pipe-run-trigger,
   .pipe-run-stat,
   .pipe-run-dur {
     display: none;
   }
+}
+
+/* ---------- Pipeline: list attribution, mode, stages, filter ---------- */
+.pipe-run-list-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-h);
+}
+.pipe-mode {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--panel-border);
+  color: var(--muted);
+}
+.pipe-mode-catchup {
+  color: var(--neon-cyan, #22e3ff);
+  border-color: rgba(34, 227, 255, 0.35);
+}
+.pipe-mode-manual {
+  color: var(--neon-purple);
+  border-color: rgba(157, 78, 221, 0.4);
+}
+.pipe-run-stat.muted .pipe-metric {
+  color: var(--muted);
+}
+
+.pipe-stage-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.pipe-stage {
+  display: grid;
+  grid-template-columns: 12px 70px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.pipe-stage-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.pipe-stage-success .pipe-stage-dot {
+  background: var(--neon-green, #33d69f);
+}
+.pipe-stage-partial .pipe-stage-dot {
+  background: var(--neon-amber, #f5a623);
+}
+.pipe-stage-failure .pipe-stage-dot {
+  background: var(--neon-red);
+}
+.pipe-stage-skipped .pipe-stage-dot {
+  background: rgba(255, 255, 255, 0.2);
+}
+.pipe-stage-name {
+  color: var(--text-h);
+}
+.pipe-stage-detail {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pipe-stage-ms {
+  color: var(--muted);
+}
+
+.pipe-filter {
+  font-family: var(--sans);
+  font-size: 12px;
+  color: var(--text-h);
+  background: var(--bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+.pipe-filter:focus {
+  outline: none;
+  border-color: var(--neon-purple);
 }
 
 /* ---------- Watchlist clickable rows ---------- */
