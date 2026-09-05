@@ -83,19 +83,19 @@ function RunRow({ run }: { run: PipelineRun }) {
             <span className={`pipe-mode pipe-mode-${run.mode}`}>{run.mode}</span>
           )}
         </span>
-        <span className="pipe-run-stat">
+        <span className="pipe-run-stat" data-label="Bars">
           <span className="pipe-metric">{run.barsCollected}</span> bars
         </span>
-        <span className="pipe-run-stat">
+        <span className="pipe-run-stat" data-label="Symbols">
           <span className="pipe-metric">{run.symbolsTotal}</span> symbols
         </span>
-        <span className={`pipe-run-stat ${run.symbolsSkipped > 0 ? 'muted' : ''}`}>
+        <span className={`pipe-run-stat ${run.symbolsSkipped > 0 ? 'muted' : ''}`} data-label="Skipped">
           <span className="pipe-metric">{run.symbolsSkipped}</span> skipped
         </span>
-        <span className={`pipe-run-stat ${run.symbolsFailed > 0 ? 'down' : ''}`}>
+        <span className={`pipe-run-stat ${run.symbolsFailed > 0 ? 'down' : ''}`} data-label="Failed">
           <span className="pipe-metric">{run.symbolsFailed}</span> failed
         </span>
-        <span className="pipe-run-dur">{formatDuration(run.durationMs)}</span>
+        <span className="pipe-run-dur" data-label="Duration">{formatDuration(run.durationMs)}</span>
         {hasDetail && <span className="pipe-caret">{open ? '−' : '+'}</span>}
       </button>
 

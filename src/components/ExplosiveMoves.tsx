@@ -2,13 +2,94 @@ import { useMemo, useState } from 'react'
 import { useExplosiveMoves, type ExplosiveMove, type ExplosiveGrade } from '../hooks/useExplosiveMoves'
 import { useBasingZones } from '../hooks/useBasingZones'
 import { formatCurrency, type Stock } from '../data/stocks'
+import { loadCached } from '../data/dailyCache'
+import { atrFromBars, signalRewardRisk, formatRatio, computePortfolioSummary } from '../data/tradeMath'
+import type { useBacktestPortfolio } from '../hooks/useBacktestPortfolio'
 import { TickerDetailModal } from './TickerDetailModal'
+
+type Portfolio = ReturnType<typeof useBacktestPortfolio>
 
 interface ExplosiveMovesProps {
   stocks: Stock[]
   status: 'live' | 'simulated' | 'loading' | 'error'
+  /** Paper-trading portfolio, for the account summary at the top of Signals. */
+  portfolio: Portfolio
   /** Opens a paper position for the symbol and routes to the Backtest page. */
   onTrade?: (symbol: string) => void
+}
+
+/** Signed currency, e.g. "+$1,240.00" / "−$310.50". */
+function signedCurrency(n: number): string {
+  const sign = n >= 0 ? '+' : '−'
+  return `${sign}$${formatCurrency(Math.abs(n))}`
+}
+
+/**
+ * Account summary: a headline tier (what the account is worth + performance)
+ * over a breakdown tier (where the money sits — available / invested / pending
+ * limit orders — which sums back to the budget at cost). Shared shape with the
+ * Backtest header via computePortfolioSummary.
+ */
+function PortfolioBar({
+  summary,
+  budget,
+}: {
+  summary: import('../data/tradeMath').PortfolioSummary
+  budget: number
+}) {
+  const totalPct = budget > 0 ? (summary.totalPnl / budget) * 100 : 0
+  const totalUp = summary.totalPnl >= 0
+  const openUp = summary.openPnl >= 0
+  const realizedUp = summary.realizedPnl >= 0
+
+  return (
+    <div className="panel em-portfolio">
+      {/* Headline: worth + lifetime performance */}
+      <div className="em-pf-headline">
+        <div className="em-pf-hero">
+          <span className="em-pf-label">Total value</span>
+          <span className="em-pf-hero-val">${formatCurrency(summary.totalValue)}</span>
+          <span className="em-pf-sub">Budget ${formatCurrency(budget)}</span>
+        </div>
+        <div className="em-pf-hero">
+          <span className="em-pf-label">Total P/L</span>
+          <span className={`em-pf-hero-val ${totalUp ? 'up' : 'down'}`}>
+            {signedCurrency(summary.totalPnl)}
+          </span>
+          <span className={`em-pf-sub ${totalUp ? 'up' : 'down'}`}>
+            {totalUp ? '+' : ''}{totalPct.toFixed(2)}% · open {signedCurrency(summary.openPnl)} · realized {signedCurrency(summary.realizedPnl)}
+          </span>
+        </div>
+      </div>
+
+      {/* Breakdown: where the money is (sums to budget at cost) */}
+      <div className="em-pf-breakdown">
+        <div className="em-pf-metric">
+          <span className="em-pf-label">Available</span>
+          <span className="em-pf-val em-pf-available">${formatCurrency(summary.available)}</span>
+        </div>
+        <div className="em-pf-metric">
+          <span className="em-pf-label">Invested</span>
+          <span className="em-pf-val">${formatCurrency(summary.invested)}</span>
+          <span className="em-pf-count">{summary.openCount} position{summary.openCount === 1 ? '' : 's'}</span>
+        </div>
+        <div className="em-pf-metric">
+          <span className="em-pf-label">Limit orders</span>
+          <span className="em-pf-val">${formatCurrency(summary.reserved)}</span>
+          <span className="em-pf-count">{summary.pendingCount} pending</span>
+        </div>
+        <div className="em-pf-metric">
+          <span className="em-pf-label">Open P/L</span>
+          <span className={`em-pf-val ${openUp ? 'up' : 'down'}`}>{signedCurrency(summary.openPnl)}</span>
+        </div>
+        <div className="em-pf-metric">
+          <span className="em-pf-label">Realized P/L</span>
+          <span className={`em-pf-val ${realizedUp ? 'up' : 'down'}`}>{signedCurrency(summary.realizedPnl)}</span>
+          <span className="em-pf-count">{summary.closedCount} closed</span>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function GradeBadge({ grade }: { grade: ExplosiveGrade }) {
@@ -89,9 +170,12 @@ function MoveBar({ move }: { move: ExplosiveMove }) {
 
 function MoveRow({
   move,
+  rr,
   onSelect,
 }: {
   move: ExplosiveMove
+  /** Reward:risk if traded at the zone's proximal line (null if not measurable). */
+  rr: number | null
   onSelect: (symbol: string) => void
 }) {
   const { latest } = move
@@ -126,19 +210,19 @@ function MoveRow({
       </div>
 
       {/* Price */}
-      <div className="em-col-num">
+      <div className="em-col-num" data-label="Price">
         <span className="em-price">${formatCurrency(latest.close)}</span>
       </div>
 
       {/* Change % */}
-      <div className="em-col-num">
+      <div className="em-col-num" data-label="Move">
         <span className={`em-change ${positive ? 'up' : 'down'}`}>
           {positive ? '+' : ''}{latest.changePct.toFixed(2)}%
         </span>
       </div>
 
       {/* Body ratio */}
-      <div className="em-col-num">
+      <div className="em-col-num" data-label="Body">
         <span
           className="em-body-ratio"
           style={{
@@ -154,7 +238,7 @@ function MoveRow({
       </div>
 
       {/* Move size in ATR multiples */}
-      <div className="em-col-num">
+      <div className="em-col-num" data-label="ATR">
         <span
           className="em-stat"
           style={{ color: latest.atrMultiple >= 3 ? 'var(--neon-orange)' : 'var(--neon-cyan)' }}
@@ -164,7 +248,7 @@ function MoveRow({
       </div>
 
       {/* Relative volume */}
-      <div className="em-col-num">
+      <div className="em-col-num" data-label="Vol">
         <span
           className="em-stat"
           style={{ color: latest.relVolume >= 1.5 ? 'var(--neon-orange)' : 'var(--muted)' }}
@@ -174,21 +258,40 @@ function MoveRow({
       </div>
 
       {/* Gap % */}
-      <div className="em-col-num">
+      <div className="em-col-num" data-label="Gap">
         <span className={`em-stat ${gapPositive ? 'up' : 'down'}`}>
           {gapPositive ? '+' : ''}{latest.gapPct.toFixed(2)}%
         </span>
       </div>
 
+      {/* Reward : risk if traded at the zone's proximal line */}
+      <div className="em-col-num" data-label="R:R">
+        <span
+          className="em-stat"
+          style={{
+            color: rr == null
+              ? 'var(--muted)'
+              : rr >= 3
+                ? 'var(--neon-orange)'
+                : rr >= 2
+                  ? 'var(--neon-cyan)'
+                  : 'var(--muted)',
+          }}
+          title="Reward:risk if entered at the zone's proximal line (target = prior swing / 2:1 fallback; stop just beyond the distal line)"
+        >
+          {formatRatio(rr)}
+        </span>
+      </div>
+
       {/* Date of latest signal */}
-      <div className="em-col-num em-col-date">
+      <div className="em-col-num em-col-date" data-label="Date">
         <span className="em-date">{latest.date}</span>
       </div>
     </li>
   )
 }
 
-export function ExplosiveMoves({ stocks, status, onTrade }: ExplosiveMovesProps) {
+export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: ExplosiveMovesProps) {
   const [moveMultiple, setMoveMultiple] = useState(2)
   const [freshnessDays, setFreshnessDays] = useState(10)
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
@@ -221,6 +324,31 @@ export function ExplosiveMoves({ stocks, status, onTrade }: ExplosiveMovesProps)
     const zone = zoneBySymbol.get(m.symbol)
     return zone != null && !zone.mitigated
   })
+
+  // Reward:risk per visible signal, computed from its zone at the proximal
+  // entry — the same math the Trade ticket uses, so the ratio shown here is
+  // what the order would get. ATR (for the stop buffer) comes from the same
+  // cached bars the zone detector used.
+  const rrBySymbol = useMemo(() => {
+    const out = new Map<string, number | null>()
+    const cached = loadCached(moves.map((m) => m.symbol))
+    for (const m of moves) {
+      const zone = zoneBySymbol.get(m.symbol)
+      if (!zone) {
+        out.set(m.symbol, null)
+        continue
+      }
+      const atr = atrFromBars(cached[m.symbol]?.bars ?? [])
+      out.set(m.symbol, signalRewardRisk(zone, atr))
+    }
+    return out
+  }, [moves, zoneBySymbol])
+
+  // Account summary (same source of truth as the Backtest header).
+  const summary = useMemo(
+    () => computePortfolioSummary(portfolio.budget, portfolio.positions, stocks, portfolio.closed),
+    [portfolio.budget, portfolio.positions, stocks, portfolio.closed],
+  )
 
   const selectedStock: Stock | null = selectedSymbol
     ? (stocks.find((s) => s.symbol === selectedSymbol) ?? null)
@@ -345,6 +473,9 @@ export function ExplosiveMoves({ stocks, status, onTrade }: ExplosiveMovesProps)
         </div>
       </div>
 
+      {/* ── Portfolio summary ── */}
+      <PortfolioBar summary={summary} budget={portfolio.budget} />
+
       {/* ── Table ── */}
       <div className="panel em-table-panel">
         <div className="em-row em-row-head">
@@ -357,6 +488,7 @@ export function ExplosiveMoves({ stocks, status, onTrade }: ExplosiveMovesProps)
           <div className="em-col-num">ATR</div>
           <div className="em-col-num">Vol</div>
           <div className="em-col-num">Gap</div>
+          <div className="em-col-num">R:R</div>
           <div className="em-col-num em-col-date">Date</div>
         </div>
 
@@ -380,7 +512,12 @@ export function ExplosiveMoves({ stocks, status, onTrade }: ExplosiveMovesProps)
         ) : (
           <ul className="em-list" aria-label="Explosive moves list">
             {moves.map((m) => (
-              <MoveRow key={m.symbol} move={m} onSelect={setSelectedSymbol} />
+              <MoveRow
+                key={m.symbol}
+                move={m}
+                rr={rrBySymbol.get(m.symbol) ?? null}
+                onSelect={setSelectedSymbol}
+              />
             ))}
           </ul>
         )}
@@ -397,6 +534,8 @@ export function ExplosiveMoves({ stocks, status, onTrade }: ExplosiveMovesProps)
         <span className="em-legend-item"><strong>ATR</strong> — move size vs normal daily range</span>
         <span className="em-sep">·</span>
         <span className="em-legend-item"><strong>Vol</strong> — today's volume vs 20-day average</span>
+        <span className="em-sep">·</span>
+        <span className="em-legend-item"><strong>R:R</strong> — reward:risk at the zone's proximal entry (cyan ≥2, orange ≥3)</span>
         <span className="em-sep">·</span>
         <span className="em-legend-item">Click any row to open the full chart</span>
       </div>

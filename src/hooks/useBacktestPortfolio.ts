@@ -101,9 +101,31 @@ export interface BacktestPosition {
   cashOutPrice: number
 }
 
+/**
+ * A position that has been closed out. Banked so realized P/L survives beyond
+ * the life of the open position (which is removed from `positions` on close).
+ */
+export interface ClosedTrade {
+  id: string
+  symbol: string
+  name?: string
+  side: TradeSide
+  shares: number
+  /** Fill price the position was entered at. */
+  entryPrice: number
+  /** Price the position was closed at (market price at close time). */
+  exitPrice: number
+  /** Realized gain/loss in dollars, side-adjusted. */
+  realizedPnl: number
+  openedDate: string | null
+  closedDate: string
+}
+
 interface PersistShape {
   budget: number
   positions: BacktestPosition[]
+  /** Banked closed trades — the source of realized P/L. */
+  closed: ClosedTrade[]
 }
 
 function loadState(): PersistShape {
@@ -115,12 +137,14 @@ function loadState(): PersistShape {
       const positions = Array.isArray(parsed.positions)
         ? (parsed.positions as BacktestPosition[]).map(migratePosition)
         : []
-      return { budget, positions }
+      // `closed` was added later; default to empty for states saved before it.
+      const closed = Array.isArray(parsed.closed) ? (parsed.closed as ClosedTrade[]) : []
+      return { budget, positions, closed }
     }
   } catch {
     // Corrupt/unavailable storage falls back to defaults.
   }
-  return { budget: DEFAULT_BUDGET, positions: [] }
+  return { budget: DEFAULT_BUDGET, positions: [], closed: [] }
 }
 
 /**
@@ -236,11 +260,11 @@ export interface OpenTradeInput {
 }
 
 export function useBacktestPortfolio() {
-  const [{ budget, positions }, setState] = useState<PersistShape>(loadState)
+  const [{ budget, positions, closed }, setState] = useState<PersistShape>(loadState)
 
   useEffect(() => {
-    persist({ budget, positions })
-  }, [budget, positions])
+    persist({ budget, positions, closed })
+  }, [budget, positions, closed])
 
   const setBudget = useCallback((next: number) => {
     setState((s) => ({ ...s, budget: Number.isFinite(next) && next >= 0 ? next : s.budget }))
@@ -370,13 +394,118 @@ export function useBacktestPortfolio() {
     })
   }, [])
 
-  const closePosition = useCallback((id: string) => {
-    setState((s) => ({ ...s, positions: s.positions.filter((p) => p.id !== id) }))
+  /**
+   * Settle OPEN positions against their resting exit orders, the way a real
+   * broker would: a long fills its cash-out when the day's HIGH reaches the
+   * target and its stop when the day's LOW reaches the stop (inverted for a
+   * short). The exit is booked at the LEVEL that was hit (cash-out price or
+   * stop price), not the current market price — mirroring an auto-set
+   * limit/stop order. Realized P/L is banked and compounded into budget.
+   *
+   * If both the target and the stop fall inside the same day's range we can't
+   * know the intraday order from a daily bar, so we conservatively assume the
+   * STOP hit first (worst case) — never book the optimistic outcome.
+   *
+   * No-op (same state reference) when nothing settles, so it won't churn.
+   */
+  const settleOpen = useCallback((rangeBySymbol: Map<string, { low: number; high: number }>) => {
+    setState((s) => {
+      let budget = s.budget
+      const banked: ClosedTrade[] = []
+      const remaining: BacktestPosition[] = []
+
+      for (const p of s.positions) {
+        if (p.status !== 'open' || p.entryPrice == null) {
+          remaining.push(p)
+          continue
+        }
+        const range = rangeBySymbol.get(p.symbol)
+        if (!range || !Number.isFinite(range.low) || !Number.isFinite(range.high)) {
+          remaining.push(p)
+          continue
+        }
+
+        const isShort = p.side === 'short'
+        const hitTarget = isShort ? range.low <= p.cashOutPrice : range.high >= p.cashOutPrice
+        const hitStop = isShort ? range.high >= p.stopLossPrice : range.low <= p.stopLossPrice
+
+        if (!hitTarget && !hitStop) {
+          remaining.push(p)
+          continue
+        }
+
+        // Both in-range on a daily bar: assume the stop filled first (worst case).
+        const exitPrice = hitStop ? p.stopLossPrice : p.cashOutPrice
+        const entry = p.entryPrice
+        const realizedPnl = isShort
+          ? (entry - exitPrice) * p.shares
+          : (exitPrice - entry) * p.shares
+
+        budget += realizedPnl
+        banked.push({
+          id: p.id,
+          symbol: p.symbol,
+          name: p.name,
+          side: p.side,
+          shares: p.shares,
+          entryPrice: entry,
+          exitPrice,
+          realizedPnl,
+          openedDate: p.openedDate,
+          closedDate: todayISO(),
+        })
+      }
+
+      if (banked.length === 0) return s
+      return { ...s, budget, positions: remaining, closed: [...banked, ...s.closed] }
+    })
+  }, [])
+
+  /**
+   * Close a position. If it was OPEN (filled), bank a ClosedTrade with realized
+   * P/L computed against `exitPrice` (the current market price, passed in by the
+   * caller since the hook has no live feed). Closing a still-PENDING order is a
+   * cancellation — it's simply removed, with no realized P/L.
+   */
+  const closePosition = useCallback((id: string, exitPrice?: number) => {
+    setState((s) => {
+      const pos = s.positions.find((p) => p.id === id)
+      if (!pos) return s
+
+      const positions = s.positions.filter((p) => p.id !== id)
+
+      // Pending (unfilled) order, or no usable exit price -> cancel, don't bank.
+      const entry = pos.entryPrice
+      if (pos.status !== 'open' || entry == null || exitPrice == null || !Number.isFinite(exitPrice)) {
+        return { ...s, positions }
+      }
+
+      const realizedPnl =
+        pos.side === 'short'
+          ? (entry - exitPrice) * pos.shares
+          : (exitPrice - entry) * pos.shares
+
+      const trade: ClosedTrade = {
+        id: pos.id,
+        symbol: pos.symbol,
+        name: pos.name,
+        side: pos.side,
+        shares: pos.shares,
+        entryPrice: entry,
+        exitPrice,
+        realizedPnl,
+        openedDate: pos.openedDate,
+        closedDate: todayISO(),
+      }
+      // Realized P/L compounds into the cash base (true-portfolio behavior):
+      // a banked gain grows what you can deploy next, a loss shrinks it.
+      return { ...s, budget: s.budget + realizedPnl, positions, closed: [trade, ...s.closed] }
+    })
   }, [])
 
   const resetPortfolio = useCallback(() => {
-    setState({ budget: DEFAULT_BUDGET, positions: [] })
+    setState({ budget: DEFAULT_BUDGET, positions: [], closed: [] })
   }, [])
 
-  return { budget, positions, setBudget, openTrade, fillPending, closePosition, resetPortfolio }
+  return { budget, positions, closed, setBudget, openTrade, fillPending, settleOpen, closePosition, resetPortfolio }
 }

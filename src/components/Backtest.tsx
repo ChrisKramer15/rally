@@ -5,6 +5,7 @@ import {
   type BacktestPosition,
   type useBacktestPortfolio,
 } from '../hooks/useBacktestPortfolio'
+import { computePortfolioSummary } from '../data/tradeMath'
 import { TradeDetailModal } from './TradeDetailModal'
 
 type Portfolio = ReturnType<typeof useBacktestPortfolio>
@@ -49,7 +50,7 @@ function OpenPositionRow({
 }: {
   position: BacktestPosition
   stocks: Stock[]
-  onClose: (id: string) => void
+  onClose: (id: string, exitPrice?: number) => void
   onSelect: (position: BacktestPosition) => void
 }) {
   const isShort = position.side === 'short'
@@ -93,25 +94,25 @@ function OpenPositionRow({
         <span className="bt-shares">{position.shares} sh · {position.orderType} · {formatRR(position)}</span>
       </div>
 
-      <div className="bt-col-num">
+      <div className="bt-col-num" data-label="Trade cost">
         <span className="bt-cost">${formatCurrency(tradeCost)}</span>
         <span className="bt-sub">@ ${formatCurrency(entryPrice)}</span>
       </div>
 
-      <div className="bt-col-num">
+      <div className="bt-col-num" data-label="Current cost">
         <span className={`bt-cost ${up ? 'up' : 'down'}`}>${formatCurrency(currentCost)}</span>
         <span className={`bt-sub ${up ? 'up' : 'down'}`}>
           {up ? '+' : ''}{pnlPct.toFixed(2)}%
         </span>
       </div>
 
-      <div className="bt-col-num">
+      <div className="bt-col-num" data-label="Stop-loss">
         <span className={`bt-stop ${hitStop ? 'bt-hit' : ''}`}>
           ${formatCurrency(position.stopLossPrice)}
         </span>
       </div>
 
-      <div className="bt-col-num">
+      <div className="bt-col-num" data-label="Cash-out">
         <span className={`bt-target ${hitTarget ? 'bt-hit' : ''}`}>
           ${formatCurrency(position.cashOutPrice)}
         </span>
@@ -120,9 +121,9 @@ function OpenPositionRow({
       <div className="bt-col-action">
         <button
           className="bt-close-btn"
-          onClick={(e) => { e.stopPropagation(); onClose(position.id) }}
+          onClick={(e) => { e.stopPropagation(); onClose(position.id, markPrice) }}
           aria-label={`Close ${position.symbol} position`}
-          title="Close position"
+          title="Close position at market — banks realized P/L"
         >
           ×
         </button>
@@ -174,12 +175,12 @@ function PendingOrderRow({
         <span className="bt-shares">{position.shares} sh · limit · {formatRR(position)}</span>
       </div>
 
-      <div className="bt-col-num">
+      <div className="bt-col-num" data-label="Reserved">
         <span className="bt-cost">${formatCurrency(reserved)}</span>
         <span className="bt-sub">@ ${formatCurrency(limit)}</span>
       </div>
 
-      <div className="bt-col-num bt-col-wide">
+      <div className="bt-col-num bt-col-wide" data-label="Trigger">
         <span className="bt-pending-tag">Pending</span>
         <span className="bt-sub">
           fills when {dir} ${formatCurrency(limit)}
@@ -187,11 +188,11 @@ function PendingOrderRow({
         </span>
       </div>
 
-      <div className="bt-col-num">
+      <div className="bt-col-num" data-label="Stop-loss">
         <span className="bt-stop">${formatCurrency(position.stopLossPrice)}</span>
       </div>
 
-      <div className="bt-col-num">
+      <div className="bt-col-num" data-label="Cash-out">
         <span className="bt-target">${formatCurrency(position.cashOutPrice)}</span>
       </div>
 
@@ -210,7 +211,7 @@ function PendingOrderRow({
 }
 
 export function Backtest({ stocks, portfolio }: BacktestProps) {
-  const { budget, positions, setBudget, closePosition, resetPortfolio } = portfolio
+  const { budget, positions, closed, setBudget, closePosition, resetPortfolio } = portfolio
   const [budgetDraft, setBudgetDraft] = useState<string>(String(budget))
   // Id of the position whose chart/level detail modal is open (null = closed).
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -231,29 +232,14 @@ export function Backtest({ stocks, portfolio }: BacktestProps) {
   const openPositions = useMemo(() => positions.filter((p) => p.status === 'open'), [positions])
   const pendingOrders = useMemo(() => positions.filter((p) => p.status === 'pending'), [positions])
 
-  const { invested, marketValue, openPnl, reserved } = useMemo(() => {
-    let invested = 0
-    let marketValue = 0
-    let reserved = 0
-    let openPnl = 0
-    for (const p of positions) {
-      if (p.status === 'pending') {
-        reserved += (p.limitPrice ?? 0) * p.shares
-        continue
-      }
-      const entry = p.entryPrice ?? 0
-      const tradeCost = entry * p.shares
-      const mark = currentPriceFor(p.symbol, stocks) ?? entry
-      invested += tradeCost
-      marketValue += mark * p.shares
-      // Short P/L is inverted: profit when the mark falls below entry.
-      openPnl += p.side === 'short' ? (entry - mark) * p.shares : (mark - entry) * p.shares
-    }
-    return { invested, marketValue, openPnl, reserved }
-  }, [positions, stocks])
-
-  const cash = budget - invested
+  // Shared with the Signals page summary so both views always agree.
+  const { cash, invested, marketValue, openPnl, reserved, realizedPnl, totalPnl } = useMemo(
+    () => computePortfolioSummary(budget, positions, stocks, closed),
+    [budget, positions, stocks, closed],
+  )
   const pnlUp = openPnl >= 0
+  const realizedUp = realizedPnl >= 0
+  const totalUp = totalPnl >= 0
 
   return (
     <div className="bt-page">
@@ -303,6 +289,18 @@ export function Backtest({ stocks, portfolio }: BacktestProps) {
             <span className="bt-metric-label">Open P/L</span>
             <span className={`bt-metric-val ${pnlUp ? 'up' : 'down'}`}>
               {pnlUp ? '+' : ''}${formatCurrency(openPnl)}
+            </span>
+          </div>
+          <div className="bt-metric">
+            <span className="bt-metric-label">Realized P/L</span>
+            <span className={`bt-metric-val ${realizedUp ? 'up' : 'down'}`}>
+              {realizedUp ? '+' : ''}${formatCurrency(realizedPnl)}
+            </span>
+          </div>
+          <div className="bt-metric">
+            <span className="bt-metric-label">Total P/L</span>
+            <span className={`bt-metric-val ${totalUp ? 'up' : 'down'}`}>
+              {totalUp ? '+' : ''}${formatCurrency(totalPnl)}
             </span>
           </div>
         </div>
@@ -384,9 +382,67 @@ export function Backtest({ stocks, portfolio }: BacktestProps) {
         )}
       </div>
 
+      {/* ── Closed trades (realized P/L history) ── */}
+      {closed.length > 0 && (
+        <div className="panel bt-table-panel">
+          <div className="bt-table-head-row">
+            <h3 className="bt-section-title">Closed Trades ({closed.length})</h3>
+            <span className={`bt-reserved ${realizedUp ? 'up' : 'down'}`}>
+              {realizedUp ? '+' : ''}${formatCurrency(realizedPnl)} realized
+            </span>
+          </div>
+
+          <div className="bt-closed-row bt-row-head">
+            <div className="bt-col-date">Closed</div>
+            <div className="bt-col-sym">Ticker</div>
+            <div className="bt-col-num">Entry</div>
+            <div className="bt-col-num">Exit</div>
+            <div className="bt-col-num">Realized</div>
+          </div>
+
+          <ul className="bt-list" aria-label="Closed trades">
+            {closed.map((t) => {
+              const up = t.realizedPnl >= 0
+              const cost = t.entryPrice * t.shares
+              const pct = cost > 0 ? (t.realizedPnl / cost) * 100 : 0
+              return (
+                <li key={t.id} className="bt-closed-row">
+                  <div className="bt-col-date">{t.closedDate}</div>
+                  <div className="bt-col-sym">
+                    <span className="bt-sym">
+                      {t.symbol}
+                      <span className={`bt-side-badge ${t.side === 'short' ? 'bt-side-short' : 'bt-side-long'}`}>
+                        {t.side === 'short' ? 'SHORT' : 'LONG'}
+                      </span>
+                    </span>
+                    <span className="bt-shares">{t.shares} sh</span>
+                  </div>
+                  <div className="bt-col-num" data-label="Entry">
+                    <span className="bt-sub">${formatCurrency(t.entryPrice)}</span>
+                  </div>
+                  <div className="bt-col-num" data-label="Exit">
+                    <span className="bt-sub">${formatCurrency(t.exitPrice)}</span>
+                  </div>
+                  <div className="bt-col-num" data-label="Realized">
+                    <span className={`bt-cost ${up ? 'up' : 'down'}`}>
+                      {up ? '+' : ''}${formatCurrency(t.realizedPnl)}
+                    </span>
+                    <span className={`bt-sub ${up ? 'up' : 'down'}`}>
+                      {up ? '+' : ''}{pct.toFixed(2)}%
+                    </span>
+                  </div>
+                </li>
+              )
+            })}
+          </ul>
+        </div>
+      )}
+
       <div className="bt-footnote">
-        Starting budget defaults to ${formatCurrency(DEFAULT_BUDGET)}. Stop-loss is set 8% below the
-        fill price and the cash-out target at 2× that risk. Simulation only — not financial advice.
+        Starting budget defaults to ${formatCurrency(DEFAULT_BUDGET)}. Positions auto-close at their
+        cash-out target or stop-loss when a session trades through that level — booking realized P/L
+        at the level, like a resting order — and realized P/L compounds into your budget. The × button
+        closes early at the current market price. Simulation only — not financial advice.
       </div>
 
       {selectedPosition && (

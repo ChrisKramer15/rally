@@ -14,7 +14,16 @@ import {
   fetchNameFromSupabase,
 } from '../data/supabaseDailyStore'
 import { HISTORY_LEN } from '../data/historyStore'
-import { INITIAL_STOCKS, MAX_WATCHLIST, type Stock } from '../data/stocks'
+import { INITIAL_STOCKS, MAX_WATCHLIST, MAX_WATCHLISTS, type Stock } from '../data/stocks'
+
+/**
+ * Upper bound on the union feed the dashboard renders/scans. The per-list cap
+ * (MAX_WATCHLIST = 40) limits each individual list; the dashboard consumes the
+ * de-duplicated UNION of every list, so the ceiling here is the full union
+ * (40 x 10 = 400). This is purely a safety ceiling — watchlists exist to stagger
+ * API collection, not to restrict what's visible.
+ */
+const MAX_UNION_SYMBOLS = MAX_WATCHLIST * MAX_WATCHLISTS
 
 export type FeedStatus = 'live' | 'simulated' | 'loading' | 'error'
 
@@ -87,8 +96,8 @@ const FRESHNESS_CHECK_MS = 60_000
  *   - repeated visits within a trading day cost ~0 reads.
  *
  * When Supabase isn't configured it falls back to a simulated feed so the
- * dashboard still works in development. The symbol list is capped at
- * MAX_WATCHLIST (Tier 1: the primary list, read first).
+ * dashboard still works in development. The incoming `symbols` are the
+ * de-duplicated UNION of every watchlist, capped at MAX_UNION_SYMBOLS (400).
  */
 export function useWatchlistMarket(symbols: string[]): UseWatchlistMarketResult {
   const [stocks, setStocks] = useState<Stock[]>([])
@@ -103,7 +112,7 @@ export function useWatchlistMarket(symbols: string[]): UseWatchlistMarketResult 
     stocksRef.current = stocks
   }, [stocks])
 
-  const capped = symbols.slice(0, MAX_WATCHLIST)
+  const capped = symbols.slice(0, MAX_UNION_SYMBOLS)
   const symbolsKey = capped.join(',')
 
   // Merge a batch of freshly built stocks into state, computing up/down flashes.
@@ -124,8 +133,18 @@ export function useWatchlistMarket(symbols: string[]): UseWatchlistMarketResult 
     setLastUpdated(new Date())
   }, [symbolsKey])
 
+  // Guards an in-flight load. Bumped whenever a new refresh starts (or the hook
+  // unmounts) so a long 400-symbol read loop from a PRIOR run stops instead of
+  // overlapping with the new one — otherwise restarts kept re-prioritizing the
+  // head of the list and the tail (~188 symbols) never finished caching.
+  const loadTokenRef = useRef(0)
+
   const refresh = useCallback(async () => {
     const syms = symbolsKey ? symbolsKey.split(',') : []
+
+    // Claim this run; any earlier in-flight loop will see a newer token and bail.
+    const myToken = ++loadTokenRef.current
+    const isStale = () => loadTokenRef.current !== myToken
 
     if (syms.length === 0) {
       setStocks([])
@@ -166,6 +185,10 @@ export function useWatchlistMarket(symbols: string[]): UseWatchlistMarketResult 
     // own DB, CORS-safe, no external rate limit), so concurrency can be higher.
     const concurrency = 6
     for (let i = 0; i < stale.length; i += concurrency) {
+      // A newer refresh (symbol set changed, or unmount) superseded us — stop so
+      // we don't compete with it or thrash state. The newer run reads the rest.
+      if (isStale()) return
+
       const batch = stale.slice(i, i + concurrency)
       const built: Stock[] = []
       await Promise.all(
@@ -183,9 +206,13 @@ export function useWatchlistMarket(symbols: string[]): UseWatchlistMarketResult 
           }
         }),
       )
+      // saveSymbol already persisted to the cache above, so even if this run is
+      // superseded right after, the bars are cached and won't be re-read.
       if (built.length) applyStocks(built)
       setUsage(usageSnapshot())
     }
+
+    if (isStale()) return
 
     if (hitError) {
       setStatus('error')
@@ -205,6 +232,12 @@ export function useWatchlistMarket(symbols: string[]): UseWatchlistMarketResult 
     return () => {
       cancelled = true
       window.clearTimeout(kickoff)
+      // Invalidate any in-flight loop from this render's refresh so it stops at
+      // the next batch boundary instead of overlapping the next one. We WANT the
+      // live current value here (not a render-time snapshot): bumping it is
+      // exactly what signals the running loop to bail.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      loadTokenRef.current++
     }
   }, [refresh])
 

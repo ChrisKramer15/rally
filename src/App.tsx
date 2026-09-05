@@ -15,26 +15,8 @@ import { DataPipeline } from './components/DataPipeline'
 import { ExplosiveMoves } from './components/ExplosiveMoves'
 import { Backtest } from './components/Backtest'
 import { useBacktestPortfolio, type TradeSide } from './hooks/useBacktestPortfolio'
-import type { DailyBar } from './data/tiingo'
+import { atrFromBars } from './data/tradeMath'
 import './App.css'
-
-/**
- * Wilder-style ATR over the last `period` bars. Used to size the stop buffer
- * beyond the distal line when placing a trade. Returns undefined without enough
- * history.
- */
-function atrFromBars(bars: DailyBar[], period = 14): number | undefined {
-  if (bars.length < period + 1) return undefined
-  const recent = bars.slice(-(period + 1))
-  let sum = 0
-  for (let i = 1; i < recent.length; i++) {
-    const b = recent[i]
-    const prev = recent[i - 1]
-    const tr = Math.max(b.high - b.low, Math.abs(b.high - prev.close), Math.abs(b.low - prev.close))
-    sum += tr
-  }
-  return sum / period
-}
 
 type View = 'dashboard' | 'signals' | 'backtest' | 'pipeline'
 
@@ -129,16 +111,27 @@ function App() {
   // session traded *through* the proximal line (intraday touch), not only when
   // the close crossed it. The latest bar comes from the local daily-bar cache;
   // if a symbol isn't cached we fall back to its live price as a flat range.
-  const { fillPending } = portfolio
-  const pendingSymbols = useMemo(
-    () => portfolio.positions.filter((p) => p.status === 'pending').map((p) => p.symbol),
+  // On each feed refresh, test resting orders against each symbol's latest daily
+  // bar low/high, so both PENDING limit entries and OPEN positions' target/stop
+  // fire on an intraday touch (traded *through* the level), not just the close:
+  //   • fillPending — opens a pending limit when the proximal line is hit
+  //   • settleOpen  — closes an open position at its cash-out (target) or stop,
+  //                   booking realized P/L at that level like an auto-set order
+  // The latest bar comes from the local daily-bar cache; if a symbol isn't
+  // cached we fall back to its live price as a zero-width range.
+  const { fillPending, settleOpen } = portfolio
+  const orderSymbols = useMemo(
+    () =>
+      portfolio.positions
+        .filter((p) => p.status === 'pending' || p.status === 'open')
+        .map((p) => p.symbol),
     [portfolio.positions],
   )
   useEffect(() => {
-    if (pendingSymbols.length === 0) return
-    const cached = loadCached(pendingSymbols)
+    if (orderSymbols.length === 0) return
+    const cached = loadCached(orderSymbols)
     const rangeBySymbol = new Map<string, { low: number; high: number }>()
-    for (const sym of pendingSymbols) {
+    for (const sym of orderSymbols) {
       const bars = cached[sym]?.bars
       const latest = bars && bars.length > 0 ? bars[bars.length - 1] : undefined
       if (latest) {
@@ -149,8 +142,11 @@ function App() {
         if (live !== undefined) rangeBySymbol.set(sym, { low: live, high: live })
       }
     }
+    // Fill entries first (a limit could fill and then hit its target same day),
+    // then settle any open positions' target/stop.
     fillPending(rangeBySymbol)
-  }, [stocks, pendingSymbols, fillPending])
+    settleOpen(rangeBySymbol)
+  }, [stocks, orderSymbols, fillPending, settleOpen])
 
   // Ticker tape is always sorted alphabetically, regardless of the watchlist's
   // own sort control.
@@ -160,11 +156,19 @@ function App() {
     ? lastUpdated.toLocaleTimeString('en-US', { hour12: false })
     : '—'
 
+  // Scroll the ticker at a constant visual speed regardless of how many symbols
+  // are in the union: scale the marquee duration with the item count (~2s per
+  // ticker) rather than a fixed duration, which would speed up as the list grows.
+  const tickerDuration = Math.max(45, tickerStocks.length * 3)
+
   return (
     <div className="dashboard">
       {/* Ticker tape — always alphabetized, independent of watchlist sort. */}
       <div className="ticker-tape">
-        <div className="ticker-track">
+        <div
+          className="ticker-track"
+          style={{ animationDuration: `${tickerDuration}s` }}
+        >
           {[...tickerStocks, ...tickerStocks].map((s, i) => {
             const pct = changePct(s.price, s.prevClose)
             const positive = pct >= 0
@@ -267,7 +271,7 @@ function App() {
           </section>
         </>
       ) : view === 'signals' ? (
-        <ExplosiveMoves stocks={stocks} status={status} onTrade={handleTrade} />
+        <ExplosiveMoves stocks={stocks} status={status} portfolio={portfolio} onTrade={handleTrade} />
       ) : view === 'backtest' ? (
         <Backtest stocks={stocks} portfolio={portfolio} />
       ) : (

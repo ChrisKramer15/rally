@@ -87,17 +87,79 @@ function isoDaysAgo(days: number): string {
   return d.toISOString().slice(0, 10)
 }
 
-/** Today's session date in US-Eastern terms (YYYY-MM-DD), matching how the
- *  collector stores bar dates. Used by the smart catch-up to decide "already
- *  have today's bar." Uses ET so the rollover lines up with the US market day. */
-function easternToday(): string {
-  const fmt = new Intl.DateTimeFormat('en-CA', {
+/** Minute after the 16:00 ET close at which a session's daily bar is final. */
+const CLOSE_CUTOFF_MINUTES = 16 * 60 + 1 // 16:01 ET
+
+const ET_WEEKDAY_INDEX: Record<string, number> = {
+  Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6,
+}
+
+/** Break a Date into its America/New_York wall-clock parts. */
+function etParts(date: Date): {
+  year: number; month: number; day: number; hour: number; minute: number; weekday: number
+} {
+  const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/New_York',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  })
-  return fmt.format(new Date()) // en-CA -> YYYY-MM-DD
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false, weekday: 'short',
+  }).formatToParts(date)
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? ''
+  const rawHour = Number(get('hour'))
+  return {
+    year: Number(get('year')),
+    month: Number(get('month')),
+    day: Number(get('day')),
+    hour: rawHour === 24 ? 0 : rawHour, // Intl can emit "24" at midnight
+    minute: Number(get('minute')),
+    weekday: ET_WEEKDAY_INDEX[get('weekday')] ?? 0,
+  }
+}
+
+function toIsoDay(year: number, month: number, day: number): string {
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+}
+
+/** Step an ISO day back one calendar day (UTC-noon anchor avoids DST edges). */
+function previousIsoDay(day: string): string {
+  const [y, m, d] = day.split('-').map(Number)
+  const anchor = new Date(Date.UTC(y, m - 1, d, 12, 0, 0))
+  anchor.setUTCDate(anchor.getUTCDate() - 1)
+  return toIsoDay(anchor.getUTCFullYear(), anchor.getUTCMonth() + 1, anchor.getUTCDate())
+}
+
+/** Walk back to the most recent Mon-Fri (returns input if already a weekday). */
+function lastWeekday(day: string): string {
+  let cursor = day
+  for (let i = 0; i < 7; i++) {
+    const [y, m, d] = cursor.split('-').map(Number)
+    const wd = new Date(Date.UTC(y, m - 1, d, 12, 0, 0)).getUTCDay()
+    if (wd !== 0 && wd !== 6) return cursor
+    cursor = previousIsoDay(cursor)
+  }
+  return cursor
+}
+
+/**
+ * The most recent trading day whose daily bar should be considered FINAL as of
+ * `now` (YYYY-MM-DD, ET). This is the date the freshest stored bar can possibly
+ * carry, so the smart catch-up compares against THIS, not the raw calendar day
+ * (a bar dated "today" doesn't exist until today's session closes + is pulled).
+ *
+ * Mirrors the client's marketCalendar.effectiveTradingDay:
+ *   - weekday at/after 16:01 ET -> today
+ *   - weekday before 16:01 ET   -> previous weekday
+ *   - weekend                   -> previous weekday (Friday)
+ * Holidays are intentionally not modeled (a missing bar just means no skip).
+ */
+function effectiveTradingDay(now: Date = new Date()): string {
+  const et = etParts(now)
+  const today = toIsoDay(et.year, et.month, et.day)
+  if (et.weekday === 0 || et.weekday === 6) {
+    return lastWeekday(previousIsoDay(today))
+  }
+  const minutesSinceMidnight = et.hour * 60 + et.minute
+  if (minutesSinceMidnight >= CLOSE_CUTOFF_MINUTES) return today
+  return lastWeekday(previousIsoDay(today))
 }
 
 async function fetchTiingoBars(
@@ -283,11 +345,14 @@ Deno.serve(async (req) => {
   // ── Smart catch-up: drop symbols that already hold today's bar ───────────
   let skipped = 0
   if (mode === 'catchup' && symbols.length > 0) {
-    const today = easternToday()
+    // Compare against the latest FINAL trading day (not the raw calendar date):
+    // the freshest bar Tiingo can return is the last completed session's, so a
+    // symbol is "current" when it already holds a bar for effectiveTradingDay.
+    const freshDay = effectiveTradingDay()
     const { data: freshRows, error: freshErr } = await supabase
       .from('prices')
       .select('symbol')
-      .eq('date', today)
+      .eq('date', freshDay)
       .in('symbol', symbols)
     if (freshErr) {
       // If the freshness probe fails, fall back to pulling everything (safe).
@@ -397,12 +462,26 @@ Deno.serve(async (req) => {
   const fetchedOk = Object.keys(results).length
   const upsertedSymbols = Object.values(results).filter((n) => n > 0).length
 
-  // Fetch stage reflects how many symbols we got a (non-error) response for.
+  // Symbols that responded OK but returned ZERO bars. Tiingo does this for a
+  // delisted / unknown / mis-formatted ticker (404 or an empty window), and the
+  // old code silently swallowed it as a success. Surface it so a dead ticker
+  // (e.g. an acquired name that stopped trading) shows up on the Data Pipeline
+  // page instead of quietly wasting a collection slot forever.
+  const emptySymbols = Object.keys(results)
+    .filter((sym) => results[sym] === 0)
+    .sort()
+  const emptyCount = emptySymbols.length
+
+  // Fetch stage reflects how many symbols we got a (non-error) response for,
+  // and now flags any that came back empty (likely delisted).
   stages.push({
     stage: 'fetch',
     status: failedCount === 0 ? 'success' : fetchedOk > 0 ? 'partial' : 'failure',
     ms: Math.round(fetchMs),
-    detail: `${fetchedOk}/${symbols.length} fetched ok${failedCount ? ` · ${failedCount} errored` : ''}`,
+    detail:
+      `${fetchedOk}/${symbols.length} fetched ok` +
+      (failedCount ? ` · ${failedCount} errored` : '') +
+      (emptyCount ? ` · ${emptyCount} returned no data (likely delisted): ${emptySymbols.join(', ')}` : ''),
   })
   // Upsert stage reflects the write into prices.
   stages.push({
@@ -414,6 +493,12 @@ Deno.serve(async (req) => {
   void fetchStart
 
   const status = failedCount === 0 ? 'success' : fetchedOk > 0 ? 'partial' : 'failure'
+
+  // Run-level note when symbols came back empty, so the delisted tickers are
+  // visible at a glance on the monitoring page (not just buried in per_symbol).
+  const message = emptyCount
+    ? `${emptyCount} symbol${emptyCount > 1 ? 's' : ''} returned no data (likely delisted): ${emptySymbols.join(', ')}`
+    : undefined
 
   await logRun(supabase, {
     status,
@@ -430,6 +515,7 @@ Deno.serve(async (req) => {
     per_symbol: results,
     errors,
     stages,
+    message,
   })
 
   return json({
@@ -440,6 +526,7 @@ Deno.serve(async (req) => {
     symbols: symbols.length,
     skipped,
     collected,
+    empty: emptyCount ? emptySymbols : undefined,
     perSymbol: results,
     errors: failedCount ? errors : undefined,
   })
