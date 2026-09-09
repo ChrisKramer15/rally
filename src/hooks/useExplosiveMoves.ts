@@ -90,7 +90,7 @@ const DEFAULT_MOVE_MULTIPLE = 2.0
  * this many trading bars of the symbol's most recent bar. Older candles remain
  * in history for context but are treated as stale.
  */
-const DEFAULT_FRESHNESS_DAYS = 10
+const DEFAULT_FRESHNESS_DAYS = 90
 
 /** Body-to-range ratio floor for any qualifying candle. */
 const MIN_BODY_RATIO = 0.6

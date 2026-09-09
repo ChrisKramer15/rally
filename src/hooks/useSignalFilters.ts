@@ -16,6 +16,9 @@ export type GradeFilter = 'all' | 'A+' | 'strong'
 /** Direction filter derived from the sign of the move's change %. */
 export type DirectionFilter = 'all' | 'up' | 'down'
 
+/** Zone-quality filter: any, or only A+ / good / weak supply-demand zones. */
+export type ZoneGradeFilter = 'all' | 'A+' | 'good' | 'weak'
+
 export interface SignalFilters {
   /** Show only this grade (or all). */
   grade: GradeFilter
@@ -25,6 +28,10 @@ export interface SignalFilters {
   minAtr: number
   /** Minimum relative volume. 0 = no floor. */
   minRelVolume: number
+  /** Minimum reward:risk at the zone's proximal entry. 0 = no floor. */
+  minRr: number
+  /** Show only signals whose supply/demand zone is this quality (or all). */
+  zoneGrade: ZoneGradeFilter
 }
 
 export const DEFAULT_FILTERS: SignalFilters = {
@@ -32,6 +39,8 @@ export const DEFAULT_FILTERS: SignalFilters = {
   direction: 'all',
   minAtr: 0,
   minRelVolume: 0,
+  minRr: 0,
+  zoneGrade: 'all',
 }
 
 const STORAGE_KEY = 'rally.signalFilters.v1'
@@ -58,6 +67,16 @@ function loadFilters(): SignalFilters {
           parsed.minRelVolume >= 0
             ? parsed.minRelVolume
             : 0,
+        minRr:
+          typeof parsed.minRr === 'number' && Number.isFinite(parsed.minRr) && parsed.minRr >= 0
+            ? parsed.minRr
+            : 0,
+        zoneGrade:
+          parsed.zoneGrade === 'A+' ||
+          parsed.zoneGrade === 'good' ||
+          parsed.zoneGrade === 'weak'
+            ? parsed.zoneGrade
+            : 'all',
       }
     }
   } catch {
@@ -80,6 +99,8 @@ export interface UseSignalFiltersResult {
   setDirection: (direction: DirectionFilter) => void
   setMinAtr: (minAtr: number) => void
   setMinRelVolume: (minRelVolume: number) => void
+  setMinRr: (minRr: number) => void
+  setZoneGrade: (zoneGrade: ZoneGradeFilter) => void
   clearFilters: () => void
   /** True when any filter differs from the defaults (something is being hidden). */
   isActive: boolean
@@ -118,6 +139,17 @@ export function useSignalFilters(): UseSignalFiltersResult {
     }))
   }, [])
 
+  const setMinRr = useCallback((minRr: number) => {
+    setFilters((f) => ({
+      ...f,
+      minRr: Number.isFinite(minRr) && minRr >= 0 ? minRr : 0,
+    }))
+  }, [])
+
+  const setZoneGrade = useCallback((zoneGrade: ZoneGradeFilter) => {
+    setFilters((f) => ({ ...f, zoneGrade }))
+  }, [])
+
   const clearFilters = useCallback(() => {
     setFilters({ ...DEFAULT_FILTERS })
   }, [])
@@ -126,7 +158,9 @@ export function useSignalFilters(): UseSignalFiltersResult {
     filters.grade !== DEFAULT_FILTERS.grade ||
     filters.direction !== DEFAULT_FILTERS.direction ||
     filters.minAtr !== DEFAULT_FILTERS.minAtr ||
-    filters.minRelVolume !== DEFAULT_FILTERS.minRelVolume
+    filters.minRelVolume !== DEFAULT_FILTERS.minRelVolume ||
+    filters.minRr !== DEFAULT_FILTERS.minRr ||
+    filters.zoneGrade !== DEFAULT_FILTERS.zoneGrade
 
   return {
     filters,
@@ -134,20 +168,40 @@ export function useSignalFilters(): UseSignalFiltersResult {
     setDirection,
     setMinAtr,
     setMinRelVolume,
+    setMinRr,
+    setZoneGrade,
     clearFilters,
     isActive,
   }
+}
+
+/** Zone-quality + reward:risk context for a signal, resolved by the caller. */
+export interface SignalZoneContext {
+  /** Quality of the signal's supply/demand zone, if any. */
+  zoneGrade?: 'A+' | 'good' | 'weak' | null
+  /** Reward:risk at the zone's proximal entry, or null when not computable. */
+  rr?: number | null
 }
 
 /** Apply the user filters to a single signal. Returns true when it should show. */
 export function matchesFilters(
   filters: SignalFilters,
   candle: { grade: 'A+' | 'strong'; changePct: number; atrMultiple: number; relVolume: number },
+  zone: SignalZoneContext = {},
 ): boolean {
   if (filters.grade !== 'all' && candle.grade !== filters.grade) return false
   if (filters.direction === 'up' && candle.changePct < 0) return false
   if (filters.direction === 'down' && candle.changePct >= 0) return false
   if (filters.minAtr > 0 && candle.atrMultiple < filters.minAtr) return false
   if (filters.minRelVolume > 0 && candle.relVolume < filters.minRelVolume) return false
+
+  // Zone quality: when a specific grade is required, a signal with no zone or a
+  // different grade is hidden.
+  if (filters.zoneGrade !== 'all' && zone.zoneGrade !== filters.zoneGrade) return false
+
+  // Min R:R: a signal with no computable R:R is hidden once a floor is set,
+  // since we can't confirm it clears the bar.
+  if (filters.minRr > 0 && (zone.rr == null || zone.rr < filters.minRr)) return false
+
   return true
 }

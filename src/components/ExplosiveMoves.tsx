@@ -294,7 +294,7 @@ function MoveRow({
 
 export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: ExplosiveMovesProps) {
   const [moveMultiple, setMoveMultiple] = useState(2)
-  const [freshnessDays, setFreshnessDays] = useState(10)
+  const [freshnessDays, setFreshnessDays] = useState(90)
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
 
   // Persistent user filters — stay put until changed or cleared, even across
@@ -305,6 +305,8 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
     setDirection,
     setMinAtr,
     setMinRelVolume,
+    setMinRr,
+    setZoneGrade,
     clearFilters,
     isActive: filtersActive,
   } = useSignalFilters()
@@ -332,31 +334,28 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
   //     is support/resistance, not a zone — nothing to place an entry against)
   //   • that zone is still fresh (not mitigated): price hasn't returned to the
   //     proximal line, so the first-touch entry is still available
-  const moves = allMoves.filter((m) => {
-    if (!m.latest.isFresh) return false
-    const zone = zoneBySymbol.get(m.symbol)
-    if (zone == null || zone.mitigated) return false
-    // User-controlled filters (grade / direction / min ATR / min rel-volume).
-    return matchesFilters(filters, m.latest)
-  })
+  // Signals that pass the actionability rules (fresh move + fresh tradeable
+  // zone) but BEFORE the user's display filters. This is the pool the filters
+  // narrow, and the base for how many are hidden.
+  const actionable = useMemo(
+    () =>
+      allMoves.filter((m) => {
+        if (!m.latest.isFresh) return false
+        const zone = zoneBySymbol.get(m.symbol)
+        return zone != null && !zone.mitigated
+      }),
+    [allMoves, zoneBySymbol],
+  )
 
-  // Actionable signals before user filters — lets us report how many the
-  // filters are hiding, so the count doesn't look like missing data.
-  const actionableCount = allMoves.filter((m) => {
-    if (!m.latest.isFresh) return false
-    const zone = zoneBySymbol.get(m.symbol)
-    return zone != null && !zone.mitigated
-  }).length
-  const filteredHidden = actionableCount - moves.length
-
-  // Reward:risk per visible signal, computed from its zone at the proximal
+  // Reward:risk per actionable signal, computed from its zone at the proximal
   // entry — the same math the Trade ticket uses, so the ratio shown here is
   // what the order would get. ATR (for the stop buffer) comes from the same
-  // cached bars the zone detector used.
+  // cached bars the zone detector used. Computed over `actionable` (not the
+  // filtered list) so the R:R filter can read it without a circular dependency.
   const rrBySymbol = useMemo(() => {
     const out = new Map<string, number | null>()
-    const cached = loadCached(moves.map((m) => m.symbol))
-    for (const m of moves) {
+    const cached = loadCached(actionable.map((m) => m.symbol))
+    for (const m of actionable) {
       const zone = zoneBySymbol.get(m.symbol)
       if (!zone) {
         out.set(m.symbol, null)
@@ -366,7 +365,19 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
       out.set(m.symbol, signalRewardRisk(zone, atr))
     }
     return out
-  }, [moves, zoneBySymbol])
+  }, [actionable, zoneBySymbol])
+
+  // Apply the user's persisted display filters, including zone quality and the
+  // reward:risk floor (resolved from the zone + rrBySymbol above).
+  const moves = actionable.filter((m) => {
+    const zone = zoneBySymbol.get(m.symbol)
+    return matchesFilters(filters, m.latest, {
+      zoneGrade: zone?.grade ?? null,
+      rr: rrBySymbol.get(m.symbol) ?? null,
+    })
+  })
+
+  const filteredHidden = actionable.length - moves.length
 
   // Account summary (same source of truth as the Backtest header).
   const summary = useMemo(
@@ -510,6 +521,38 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
               />
               <span className="em-control-unit">×</span>
             </div>
+          </label>
+
+          <label className="em-control">
+            <span className="em-control-label">Min R:R</span>
+            <div className="em-control-input-wrap">
+              <input
+                className="em-control-input"
+                type="number"
+                min={0}
+                max={20}
+                step={0.5}
+                value={filters.minRr}
+                onChange={(e) => setMinRr(Number(e.target.value))}
+                aria-label="Minimum reward-to-risk to show"
+              />
+              <span className="em-control-unit">: 1</span>
+            </div>
+          </label>
+
+          <label className="em-control">
+            <span className="em-control-label">Zone</span>
+            <select
+              className="em-filter-select"
+              value={filters.zoneGrade}
+              onChange={(e) => setZoneGrade(e.target.value as typeof filters.zoneGrade)}
+              aria-label="Filter signals by zone quality"
+            >
+              <option value="all">Any</option>
+              <option value="A+">A+ only</option>
+              <option value="good">Good only</option>
+              <option value="weak">Weak only</option>
+            </select>
           </label>
 
           {filtersActive && (
