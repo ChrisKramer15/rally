@@ -1865,6 +1865,44 @@
   color: var(--muted);
 }
 
+/* ── Signal filter select (persisted display filters) ── */
+.em-filter-select {
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-h);
+  background: var(--bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 5px 10px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.em-filter-select:focus {
+  outline: none;
+  border-color: var(--neon-purple);
+  box-shadow: var(--glow);
+}
+
+/* Clear-filters button — appears only when a filter is active. */
+.em-clear-filters {
+  align-self: flex-end;
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.em-clear-filters:hover {
+  color: var(--text-h);
+  border-color: var(--neon-purple);
+}
+
 /* ── Summary pill ── */
 .em-summary {
   display: flex;

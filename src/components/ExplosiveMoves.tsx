@@ -5,6 +5,7 @@ import { formatCurrency, type Stock } from '../data/stocks'
 import { loadCached } from '../data/dailyCache'
 import { atrFromBars, signalRewardRisk, formatRatio, computePortfolioSummary } from '../data/tradeMath'
 import type { useBacktestPortfolio } from '../hooks/useBacktestPortfolio'
+import { useSignalFilters, matchesFilters } from '../hooks/useSignalFilters'
 import { TickerDetailModal } from './TickerDetailModal'
 
 type Portfolio = ReturnType<typeof useBacktestPortfolio>
@@ -296,6 +297,18 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
   const [freshnessDays, setFreshnessDays] = useState(10)
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
 
+  // Persistent user filters — stay put until changed or cleared, even across
+  // app restarts (see useSignalFilters).
+  const {
+    filters,
+    setGrade,
+    setDirection,
+    setMinAtr,
+    setMinRelVolume,
+    clearFilters,
+    isActive: filtersActive,
+  } = useSignalFilters()
+
   const { moves: allMoves, skippedCount, uncachedCount } = useExplosiveMoves(
     stocks,
     moveMultiple,
@@ -322,8 +335,19 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
   const moves = allMoves.filter((m) => {
     if (!m.latest.isFresh) return false
     const zone = zoneBySymbol.get(m.symbol)
-    return zone != null && !zone.mitigated
+    if (zone == null || zone.mitigated) return false
+    // User-controlled filters (grade / direction / min ATR / min rel-volume).
+    return matchesFilters(filters, m.latest)
   })
+
+  // Actionable signals before user filters — lets us report how many the
+  // filters are hiding, so the count doesn't look like missing data.
+  const actionableCount = allMoves.filter((m) => {
+    if (!m.latest.isFresh) return false
+    const zone = zoneBySymbol.get(m.symbol)
+    return zone != null && !zone.mitigated
+  }).length
+  const filteredHidden = actionableCount - moves.length
 
   // Reward:risk per visible signal, computed from its zone at the proximal
   // entry — the same math the Trade ticket uses, so the ratio shown here is
@@ -424,6 +448,80 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
               <span className="em-control-unit">days</span>
             </div>
           </label>
+
+          {/* ── Display filters (persisted across app restarts) ── */}
+          <label className="em-control">
+            <span className="em-control-label">Grade</span>
+            <select
+              className="em-filter-select"
+              value={filters.grade}
+              onChange={(e) => setGrade(e.target.value as typeof filters.grade)}
+              aria-label="Filter signals by grade"
+            >
+              <option value="all">All</option>
+              <option value="A+">A+ only</option>
+              <option value="strong">Strong only</option>
+            </select>
+          </label>
+
+          <label className="em-control">
+            <span className="em-control-label">Direction</span>
+            <select
+              className="em-filter-select"
+              value={filters.direction}
+              onChange={(e) => setDirection(e.target.value as typeof filters.direction)}
+              aria-label="Filter signals by direction"
+            >
+              <option value="all">Both</option>
+              <option value="up">Up only</option>
+              <option value="down">Down only</option>
+            </select>
+          </label>
+
+          <label className="em-control">
+            <span className="em-control-label">Min ATR</span>
+            <div className="em-control-input-wrap">
+              <input
+                className="em-control-input"
+                type="number"
+                min={0}
+                max={20}
+                step={0.5}
+                value={filters.minAtr}
+                onChange={(e) => setMinAtr(Number(e.target.value))}
+                aria-label="Minimum move size in ATR multiples to show"
+              />
+              <span className="em-control-unit">×</span>
+            </div>
+          </label>
+
+          <label className="em-control">
+            <span className="em-control-label">Min Vol</span>
+            <div className="em-control-input-wrap">
+              <input
+                className="em-control-input"
+                type="number"
+                min={0}
+                max={20}
+                step={0.25}
+                value={filters.minRelVolume}
+                onChange={(e) => setMinRelVolume(Number(e.target.value))}
+                aria-label="Minimum relative volume to show"
+              />
+              <span className="em-control-unit">×</span>
+            </div>
+          </label>
+
+          {filtersActive && (
+            <button
+              type="button"
+              className="em-clear-filters"
+              onClick={clearFilters}
+              aria-label="Clear all signal filters"
+            >
+              Clear filters
+            </button>
+          )}
         </div>
 
         {/* Summary */}
@@ -445,6 +543,14 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
                 </span>
               )}
             </div>
+          )}
+          {filteredHidden > 0 && (
+            <span
+              className="em-skipped"
+              title={`${filteredHidden} actionable signal(s) hidden by your filters — hit "Clear filters" to see them`}
+            >
+              · {filteredHidden} filtered
+            </span>
           )}
           {staleHidden > 0 && (
             <span
@@ -504,9 +610,11 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
               No fresh explosive moves
               {stocks.length === 0
                 ? ' — add symbols to your watchlist to get started.'
-                : staleHidden > 0
-                  ? `. ${staleHidden} symbol(s) moved earlier — widen the Freshness window to see them.`
-                  : '. Try lowering the Min Move threshold or widening Freshness.'}
+                : filteredHidden > 0
+                  ? `. ${filteredHidden} match the strategy but are hidden by your filters — hit "Clear filters" to see them.`
+                  : staleHidden > 0
+                    ? `. ${staleHidden} symbol(s) moved earlier — widen the Freshness window to see them.`
+                    : '. Try lowering the Min Move threshold or widening Freshness.'}
             </span>
           </div>
         ) : (
