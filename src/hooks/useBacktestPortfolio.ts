@@ -1,11 +1,28 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  deleteTrade as deleteTradeRemote,
+  deleteTrades as deleteTradesRemote,
+  fetchPortfolio,
+  insertClosedTrade as insertClosedTradeRemote,
+  insertClosedTrades as insertClosedTradesRemote,
+  insertTrade as insertTradeRemote,
+  resetRemotePortfolio,
+  saveBudget as saveBudgetRemote,
+  upsertTrades as upsertTradesRemote,
+} from '../data/supabaseTradesStore'
 
 /**
  * useBacktestPortfolio
  *
- * A lightweight, client-only paper-trading portfolio used by the Backtest page.
- * State is persisted to localStorage so positions survive reloads. There's no
+ * A lightweight paper-trading portfolio used by the Backtest page. There's no
  * network/broker here — it's a simulation the user drives from the Trade button.
+ *
+ * Persistence: Supabase is the source of truth (durable + cross-device via the
+ * `portfolio` / `trades` / `closed_trades` tables). localStorage remains a fast
+ * initial-render cache and offline fallback — the same idiom useWatchlist uses.
+ * Previously the whole portfolio lived in one localStorage key; once the daily-
+ * bar cache filled the origin quota, new positions silently failed to persist
+ * and vanished on refresh. Supabase removes that ceiling.
  *
  * Sides:
  *   • long  — profit when price rises. Stop below entry, target above.
@@ -262,12 +279,46 @@ export interface OpenTradeInput {
 export function useBacktestPortfolio() {
   const [{ budget, positions, closed }, setState] = useState<PersistShape>(loadState)
 
+  // Guards the initial Supabase hydrate from clobbering a fresh local edit the
+  // user made before the async read returned (mirrors useWatchlist).
+  const editedRef = useRef(false)
+
+  // Mirror every state change into the localStorage cache (fast next-render).
   useEffect(() => {
     persist({ budget, positions, closed })
   }, [budget, positions, closed])
 
+  // Hydrate from Supabase once on mount. Supabase is the source of truth; the
+  // local cache just seeds the first paint. Skip if the user already edited.
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      const remote = await fetchPortfolio()
+      if (cancelled || editedRef.current) return
+      // Nothing to adopt when Supabase is off/empty — keep the local state.
+      if (remote.budget === null && remote.positions.length === 0 && remote.closed.length === 0) {
+        return
+      }
+      setState((prev) => {
+        const next: PersistShape = {
+          budget: remote.budget ?? prev.budget,
+          positions: remote.positions,
+          closed: remote.closed,
+        }
+        persist(next)
+        return next
+      })
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   const setBudget = useCallback((next: number) => {
-    setState((s) => ({ ...s, budget: Number.isFinite(next) && next >= 0 ? next : s.budget }))
+    if (!(Number.isFinite(next) && next >= 0)) return
+    editedRef.current = true
+    setState((s) => ({ ...s, budget: next }))
+    void saveBudgetRemote(next)
   }, [])
 
   /**
@@ -278,12 +329,16 @@ export function useBacktestPortfolio() {
    */
   const openTrade = useCallback((input: OpenTradeInput): string => {
     let resultId = ''
+    // The position actually created this call (null when a dup/invalid no-op),
+    // captured so we can persist just that new row to Supabase after setState.
+    let created: BacktestPosition | null = null
     setState((s) => {
       const existing = s.positions.find((p) => p.symbol === input.symbol)
       if (existing) {
         resultId = existing.id
         return s
       }
+      editedRef.current = true
       const shares = Math.max(1, Math.floor(input.shares))
       const riskReward = input.riskReward ?? DEFAULT_RISK_REWARD
       const today = todayISO()
@@ -316,6 +371,7 @@ export function useBacktestPortfolio() {
           ...levels,
         }
         resultId = position.id
+        created = position
         return { ...s, positions: [position, ...s.positions] }
       }
 
@@ -346,8 +402,12 @@ export function useBacktestPortfolio() {
         ...levels,
       }
       resultId = position.id
+      created = position
       return { ...s, positions: [position, ...s.positions] }
     })
+    // Persist the new position to Supabase (fire-and-forget). Only when one was
+    // actually created — a dup symbol or invalid input is a no-op.
+    if (created) void insertTradeRemote(created)
     return resultId
   }, [])
 
@@ -365,6 +425,8 @@ export function useBacktestPortfolio() {
    * state reference) when nothing fills, so it won't cause needless re-renders.
    */
   const fillPending = useCallback((rangeBySymbol: Map<string, { low: number; high: number }>) => {
+    // Positions that flipped pending -> open this call, to upsert to Supabase.
+    const filled: BacktestPosition[] = []
     setState((s) => {
       let changed = false
       const next = s.positions.map((p) => {
@@ -382,16 +444,24 @@ export function useBacktestPortfolio() {
           swingTarget: p.swingTarget,
           riskReward: p.riskReward,
         })
-        return {
+        const opened: BacktestPosition = {
           ...p,
           status: 'open' as const,
           openedDate: todayISO(),
           entryPrice: p.limitPrice,
           ...levels,
         }
+        filled.push(opened)
+        return opened
       })
       return changed ? { ...s, positions: next } : s
     })
+    // A fill is a data change even though the user didn't type anything: guard
+    // the hydrate from overwriting it, and push the updated rows to Supabase.
+    if (filled.length > 0) {
+      editedRef.current = true
+      void upsertTradesRemote(filled)
+    }
   }, [])
 
   /**
@@ -409,6 +479,10 @@ export function useBacktestPortfolio() {
    * No-op (same state reference) when nothing settles, so it won't churn.
    */
   const settleOpen = useCallback((rangeBySymbol: Map<string, { low: number; high: number }>) => {
+    // Captured for the Supabase sync after setState: the banked trades to
+    // insert, their now-removed position ids to delete, and the new budget.
+    let bankedOut: ClosedTrade[] = []
+    let newBudget: number | null = null
     setState((s) => {
       let budget = s.budget
       const banked: ClosedTrade[] = []
@@ -457,8 +531,18 @@ export function useBacktestPortfolio() {
       }
 
       if (banked.length === 0) return s
+      bankedOut = banked
+      newBudget = budget
       return { ...s, budget, positions: remaining, closed: [...banked, ...s.closed] }
     })
+    // Sync the settlement to Supabase: bank the closed rows, remove the settled
+    // position rows, and persist the compounded budget. Guard the hydrate too.
+    if (bankedOut.length > 0) {
+      editedRef.current = true
+      void insertClosedTradesRemote(bankedOut)
+      void deleteTradesRemote(bankedOut.map((t) => t.id))
+      if (newBudget !== null) void saveBudgetRemote(newBudget)
+    }
   }, [])
 
   /**
@@ -468,10 +552,16 @@ export function useBacktestPortfolio() {
    * cancellation — it's simply removed, with no realized P/L.
    */
   const closePosition = useCallback((id: string, exitPrice?: number) => {
+    // Captured for the Supabase sync after setState.
+    let removedId: string | null = null
+    let bankedTrade: ClosedTrade | null = null
+    let newBudget: number | null = null
     setState((s) => {
       const pos = s.positions.find((p) => p.id === id)
       if (!pos) return s
 
+      editedRef.current = true
+      removedId = id
       const positions = s.positions.filter((p) => p.id !== id)
 
       // Pending (unfilled) order, or no usable exit price -> cancel, don't bank.
@@ -499,12 +589,25 @@ export function useBacktestPortfolio() {
       }
       // Realized P/L compounds into the cash base (true-portfolio behavior):
       // a banked gain grows what you can deploy next, a loss shrinks it.
-      return { ...s, budget: s.budget + realizedPnl, positions, closed: [trade, ...s.closed] }
+      bankedTrade = trade
+      newBudget = s.budget + realizedPnl
+      return { ...s, budget: newBudget, positions, closed: [trade, ...s.closed] }
     })
+    // Sync to Supabase. Always remove the position row; if it was an open
+    // position we also bank the closed trade and persist the new budget.
+    if (removedId) {
+      void deleteTradeRemote(removedId)
+      if (bankedTrade) {
+        void insertClosedTradeRemote(bankedTrade)
+        if (newBudget !== null) void saveBudgetRemote(newBudget)
+      }
+    }
   }, [])
 
   const resetPortfolio = useCallback(() => {
+    editedRef.current = true
     setState({ budget: DEFAULT_BUDGET, positions: [], closed: [] })
+    void resetRemotePortfolio(DEFAULT_BUDGET)
   }, [])
 
   return { budget, positions, closed, setBudget, openTrade, fillPending, settleOpen, closePosition, resetPortfolio }
