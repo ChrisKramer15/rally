@@ -34,6 +34,11 @@ interface TradeRow {
   distal_price: number | string | null
   atr: number | string | null
   swing_target: number | string | null
+  zone_kind: 'demand' | 'supply' | null
+  zone_grade: 'A+' | 'good' | 'weak' | null
+  signal_strength: 'A+' | 'strong' | null
+  proximal_price: number | string | null
+  signal_date: string | null
   risk_reward: number | string
   shares: number
   stop_loss_price: number | string
@@ -51,6 +56,11 @@ interface ClosedTradeRow {
   realized_pnl: number | string
   opened_date: string | null
   closed_date: string
+  zone_kind: 'demand' | 'supply' | null
+  zone_grade: 'A+' | 'good' | 'weak' | null
+  signal_strength: 'A+' | 'strong' | null
+  proximal_price: number | string | null
+  signal_date: string | null
 }
 
 /** Numeric columns come back as strings from PG numeric; coerce defensively. */
@@ -77,6 +87,11 @@ function rowToPosition(r: TradeRow): BacktestPosition {
     distalPrice: num(r.distal_price),
     atr: num(r.atr),
     swingTarget: num(r.swing_target),
+    zoneKind: r.zone_kind ?? undefined,
+    zoneGrade: r.zone_grade ?? undefined,
+    signalStrength: r.signal_strength ?? undefined,
+    proximalPrice: num(r.proximal_price),
+    signalDate: r.signal_date ?? undefined,
     riskReward: num(r.risk_reward) ?? 2,
     shares: r.shares,
     stopLossPrice: num(r.stop_loss_price) ?? 0,
@@ -96,6 +111,11 @@ function rowToClosed(r: ClosedTradeRow): ClosedTrade {
     realizedPnl: num(r.realized_pnl) ?? 0,
     openedDate: r.opened_date,
     closedDate: r.closed_date,
+    zoneKind: r.zone_kind ?? undefined,
+    zoneGrade: r.zone_grade ?? undefined,
+    signalStrength: r.signal_strength ?? undefined,
+    proximalPrice: num(r.proximal_price),
+    signalDate: r.signal_date ?? undefined,
   }
 }
 
@@ -116,6 +136,11 @@ function positionToRow(p: BacktestPosition): TradeRow {
     distal_price: p.distalPrice ?? null,
     atr: p.atr ?? null,
     swing_target: p.swingTarget ?? null,
+    zone_kind: p.zoneKind ?? null,
+    zone_grade: p.zoneGrade ?? null,
+    signal_strength: p.signalStrength ?? null,
+    proximal_price: p.proximalPrice ?? null,
+    signal_date: p.signalDate ?? null,
     risk_reward: p.riskReward,
     shares: p.shares,
     stop_loss_price: p.stopLossPrice,
@@ -135,6 +160,11 @@ function closedToRow(t: ClosedTrade): ClosedTradeRow {
     realized_pnl: t.realizedPnl,
     opened_date: t.openedDate,
     closed_date: t.closedDate,
+    zone_kind: t.zoneKind ?? null,
+    zone_grade: t.zoneGrade ?? null,
+    signal_strength: t.signalStrength ?? null,
+    proximal_price: t.proximalPrice ?? null,
+    signal_date: t.signalDate ?? null,
   }
 }
 

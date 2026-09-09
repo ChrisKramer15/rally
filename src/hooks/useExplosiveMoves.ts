@@ -157,6 +157,28 @@ function gradeCandle(bodyRatio: number, relVolume: number): ExplosiveGrade {
   return cleanBody && volumeSurge ? 'A+' : 'strong'
 }
 
+/**
+ * Grade the explosive candle on a specific date (the signal strength shown on
+ * the Backtest screen). Uses the SAME body-ratio + relative-volume logic as the
+ * Signals scan, so a trade's stored strength matches what the signal displayed.
+ *
+ * Returns null when the date isn't in the bars, there's not enough history
+ * behind it to compute ATR, or the bar is flat — i.e. it can't be graded.
+ * Exported so the trade-placement path can capture the strength by date without
+ * re-running the whole scan.
+ */
+export function gradeExplosiveAt(bars: DailyBar[], date: string): ExplosiveGrade | null {
+  const i = bars.findIndex((b) => b.date === date)
+  if (i <= ATR_PERIOD) return null
+  const bar = bars[i]
+  const totalRange = bar.high - bar.low
+  if (totalRange === 0) return null
+  const bodyRatio = Math.abs(bar.close - bar.open) / totalRange
+  const avgVol = avgVolumeBefore(bars, i)
+  const relVolume = avgVol > 0 ? bar.volume / avgVol : 1
+  return gradeCandle(bodyRatio, relVolume)
+}
+
 export function useExplosiveMoves(
   stocks: Stock[],
   moveMultiple: number = DEFAULT_MOVE_MULTIPLE,

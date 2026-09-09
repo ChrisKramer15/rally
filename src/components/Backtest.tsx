@@ -3,6 +3,7 @@ import { formatCurrency, type Stock } from '../data/stocks'
 import {
   DEFAULT_BUDGET,
   type BacktestPosition,
+  type ClosedTrade,
   type useBacktestPortfolio,
 } from '../hooks/useBacktestPortfolio'
 import { computePortfolioSummary } from '../data/tradeMath'
@@ -40,6 +41,43 @@ function realizedRR(position: BacktestPosition): number | null {
 function formatRR(position: BacktestPosition): string {
   const rr = realizedRR(position)
   return rr != null ? `${rr.toFixed(1)}:1` : '—'
+}
+
+/**
+ * Badges describing the signal a trade was placed from — its zone direction
+ * (demand/supply), the base-quality grade, and the explosive-move strength.
+ * Renders nothing when the trade carries no captured signal context (e.g. a
+ * position placed before this data was tracked, or with no detected zone).
+ */
+function SignalBadges({
+  zoneKind,
+  zoneGrade,
+  signalStrength,
+}: {
+  zoneKind?: BacktestPosition['zoneKind']
+  zoneGrade?: BacktestPosition['zoneGrade']
+  signalStrength?: BacktestPosition['signalStrength']
+}) {
+  if (!zoneKind && !zoneGrade && !signalStrength) return null
+  return (
+    <span className="bt-signal">
+      {zoneKind && (
+        <span className={`bt-zone-badge bt-zone-${zoneKind}`}>
+          {zoneKind === 'supply' ? 'Supply' : 'Demand'}
+        </span>
+      )}
+      {zoneGrade && (
+        <span className="bt-signal-tag" title="Basing-zone quality grade">
+          base {zoneGrade}
+        </span>
+      )}
+      {signalStrength && (
+        <span className="bt-signal-tag" title="Explosive-move (signal) strength">
+          {signalStrength}
+        </span>
+      )}
+    </span>
+  )
 }
 
 function OpenPositionRow({
@@ -92,6 +130,11 @@ function OpenPositionRow({
           <span className="bt-name">{position.name}</span>
         )}
         <span className="bt-shares">{position.shares} sh · {position.orderType} · {formatRR(position)}</span>
+        <SignalBadges
+          zoneKind={position.zoneKind}
+          zoneGrade={position.zoneGrade}
+          signalStrength={position.signalStrength}
+        />
       </div>
 
       <div className="bt-col-num" data-label="Trade cost">
@@ -173,6 +216,11 @@ function PendingOrderRow({
           <span className="bt-name">{position.name}</span>
         )}
         <span className="bt-shares">{position.shares} sh · limit · {formatRR(position)}</span>
+        <SignalBadges
+          zoneKind={position.zoneKind}
+          zoneGrade={position.zoneGrade}
+          signalStrength={position.signalStrength}
+        />
       </div>
 
       <div className="bt-col-num" data-label="Reserved">
@@ -210,6 +258,104 @@ function PendingOrderRow({
   )
 }
 
+/** A single banked closed-trade row (reused flat and inside grouped sections). */
+function ClosedTradeRow({ trade }: { trade: ClosedTrade }) {
+  const up = trade.realizedPnl >= 0
+  const cost = trade.entryPrice * trade.shares
+  const pct = cost > 0 ? (trade.realizedPnl / cost) * 100 : 0
+  return (
+    <li className="bt-closed-row">
+      <div className="bt-col-date">{trade.closedDate}</div>
+      <div className="bt-col-sym">
+        <span className="bt-sym">
+          {trade.symbol}
+          <span className={`bt-side-badge ${trade.side === 'short' ? 'bt-side-short' : 'bt-side-long'}`}>
+            {trade.side === 'short' ? 'SHORT' : 'LONG'}
+          </span>
+        </span>
+        <span className="bt-shares">{trade.shares} sh</span>
+        <SignalBadges
+          zoneKind={trade.zoneKind}
+          zoneGrade={trade.zoneGrade}
+          signalStrength={trade.signalStrength}
+        />
+      </div>
+      <div className="bt-col-num" data-label="Entry">
+        <span className="bt-sub">${formatCurrency(trade.entryPrice)}</span>
+      </div>
+      <div className="bt-col-num" data-label="Exit">
+        <span className="bt-sub">${formatCurrency(trade.exitPrice)}</span>
+      </div>
+      <div className="bt-col-num" data-label="Realized">
+        <span className={`bt-cost ${up ? 'up' : 'down'}`}>
+          {up ? '+' : ''}${formatCurrency(trade.realizedPnl)}
+        </span>
+        <span className={`bt-sub ${up ? 'up' : 'down'}`}>
+          {up ? '+' : ''}{pct.toFixed(2)}%
+        </span>
+      </div>
+    </li>
+  )
+}
+
+/** How the closed-trades list is grouped, for reviewing signal correlation. */
+type ClosedGroupBy = 'none' | 'zoneKind' | 'zoneGrade' | 'signalStrength'
+
+const CLOSED_GROUP_OPTIONS: { value: ClosedGroupBy; label: string }[] = [
+  { value: 'none', label: 'Recent' },
+  { value: 'zoneKind', label: 'Zone' },
+  { value: 'zoneGrade', label: 'Base grade' },
+  { value: 'signalStrength', label: 'Signal' },
+]
+
+/** A bucket of closed trades sharing a group key, with review stats. */
+interface ClosedGroup {
+  key: string
+  label: string
+  trades: ClosedTrade[]
+  /** Trades with realized P/L > 0. */
+  wins: number
+  /** Net realized P/L across the group. */
+  netPnl: number
+}
+
+/** The label for a trade's value of the chosen group dimension. */
+function groupValue(trade: ClosedTrade, by: ClosedGroupBy): string {
+  switch (by) {
+    case 'zoneKind':
+      return trade.zoneKind ? (trade.zoneKind === 'supply' ? 'Supply' : 'Demand') : 'No signal'
+    case 'zoneGrade':
+      return trade.zoneGrade ? `Base ${trade.zoneGrade}` : 'No signal'
+    case 'signalStrength':
+      return trade.signalStrength ? `Signal ${trade.signalStrength}` : 'No signal'
+    case 'none':
+    default:
+      return ''
+  }
+}
+
+/**
+ * Bucket closed trades by the chosen dimension and compute per-group review
+ * stats (win count + net realized P/L). Groups are ordered by net P/L desc so
+ * the most/least profitable signal buckets surface first — the fastest read on
+ * which signal quality actually correlates with winning trades.
+ */
+function groupClosed(trades: ClosedTrade[], by: ClosedGroupBy): ClosedGroup[] {
+  const map = new Map<string, ClosedGroup>()
+  for (const t of trades) {
+    const label = groupValue(t, by)
+    let g = map.get(label)
+    if (!g) {
+      g = { key: label, label, trades: [], wins: 0, netPnl: 0 }
+      map.set(label, g)
+    }
+    g.trades.push(t)
+    if (t.realizedPnl > 0) g.wins++
+    g.netPnl += t.realizedPnl
+  }
+  return [...map.values()].sort((a, b) => b.netPnl - a.netPnl)
+}
+
 /** Which bucket of trades the Backtest table is showing. */
 type TradeView = 'pending' | 'active' | 'closed'
 
@@ -220,6 +366,8 @@ export function Backtest({ stocks, portfolio }: BacktestProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   // Which trade bucket the table shows. Defaults to active (filled positions).
   const [view, setView] = useState<TradeView>('active')
+  // How the closed-trades list is grouped, for reviewing signal correlation.
+  const [closedGroupBy, setClosedGroupBy] = useState<ClosedGroupBy>('none')
 
   // Resolve the live selected position from the current positions list so it
   // stays in sync if the underlying data changes (e.g. a pending order fills).
@@ -236,6 +384,11 @@ export function Backtest({ stocks, portfolio }: BacktestProps) {
 
   const openPositions = useMemo(() => positions.filter((p) => p.status === 'open'), [positions])
   const pendingOrders = useMemo(() => positions.filter((p) => p.status === 'pending'), [positions])
+  // Closed trades bucketed by the chosen signal dimension (empty when 'none').
+  const closedGroups = useMemo(
+    () => (closedGroupBy === 'none' ? [] : groupClosed(closed, closedGroupBy)),
+    [closed, closedGroupBy],
+  )
 
   // Shared with the Signals page summary so both views always agree.
   const { cash, invested, marketValue, openPnl, reserved, realizedPnl, totalPnl } = useMemo(
@@ -456,6 +609,26 @@ export function Backtest({ stocks, portfolio }: BacktestProps) {
             </div>
           ) : (
             <>
+              {/* Group-by control: bucket closed trades by signal dimension so
+                  win-rate + net P/L per bucket reveal what correlates with wins. */}
+              <div className="bt-groupby">
+                <span className="bt-groupby-label">Group by</span>
+                <div className="tt-seg bt-groupby-seg" role="tablist" aria-label="Group closed trades">
+                  {CLOSED_GROUP_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      role="tab"
+                      aria-selected={closedGroupBy === opt.value}
+                      className={`tt-seg-btn ${closedGroupBy === opt.value ? 'active' : ''}`}
+                      onClick={() => setClosedGroupBy(opt.value)}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               <div className="bt-closed-row bt-row-head">
                 <div className="bt-col-date">Closed</div>
                 <div className="bt-col-sym">Ticker</div>
@@ -464,41 +637,38 @@ export function Backtest({ stocks, portfolio }: BacktestProps) {
                 <div className="bt-col-num">Realized</div>
               </div>
 
-              <ul className="bt-list" aria-label="Closed trades">
-                {closed.map((t) => {
-                  const up = t.realizedPnl >= 0
-                  const cost = t.entryPrice * t.shares
-                  const pct = cost > 0 ? (t.realizedPnl / cost) * 100 : 0
+              {closedGroupBy === 'none' ? (
+                <ul className="bt-list" aria-label="Closed trades">
+                  {closed.map((t) => (
+                    <ClosedTradeRow key={t.id} trade={t} />
+                  ))}
+                </ul>
+              ) : (
+                closedGroups.map((g) => {
+                  const winRate = g.trades.length > 0 ? (g.wins / g.trades.length) * 100 : 0
+                  const netUp = g.netPnl >= 0
                   return (
-                    <li key={t.id} className="bt-closed-row">
-                      <div className="bt-col-date">{t.closedDate}</div>
-                      <div className="bt-col-sym">
-                        <span className="bt-sym">
-                          {t.symbol}
-                          <span className={`bt-side-badge ${t.side === 'short' ? 'bt-side-short' : 'bt-side-long'}`}>
-                            {t.side === 'short' ? 'SHORT' : 'LONG'}
+                    <div key={g.key} className="bt-group">
+                      <div className="bt-group-head">
+                        <span className="bt-group-label">{g.label}</span>
+                        <span className="bt-group-stats">
+                          <span className="bt-group-winrate">
+                            {g.wins}/{g.trades.length} won ({winRate.toFixed(0)}%)
+                          </span>
+                          <span className={`bt-group-net ${netUp ? 'up' : 'down'}`}>
+                            {netUp ? '+' : ''}${formatCurrency(g.netPnl)}
                           </span>
                         </span>
-                        <span className="bt-shares">{t.shares} sh</span>
                       </div>
-                      <div className="bt-col-num" data-label="Entry">
-                        <span className="bt-sub">${formatCurrency(t.entryPrice)}</span>
-                      </div>
-                      <div className="bt-col-num" data-label="Exit">
-                        <span className="bt-sub">${formatCurrency(t.exitPrice)}</span>
-                      </div>
-                      <div className="bt-col-num" data-label="Realized">
-                        <span className={`bt-cost ${up ? 'up' : 'down'}`}>
-                          {up ? '+' : ''}${formatCurrency(t.realizedPnl)}
-                        </span>
-                        <span className={`bt-sub ${up ? 'up' : 'down'}`}>
-                          {up ? '+' : ''}{pct.toFixed(2)}%
-                        </span>
-                      </div>
-                    </li>
+                      <ul className="bt-list" aria-label={`Closed trades — ${g.label}`}>
+                        {g.trades.map((t) => (
+                          <ClosedTradeRow key={t.id} trade={t} />
+                        ))}
+                      </ul>
+                    </div>
                   )
-                })}
-              </ul>
+                })
+              )}
             </>
           )}
         </div>

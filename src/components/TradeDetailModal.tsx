@@ -159,6 +159,25 @@ export function TradeDetailModal({ position, livePrice, onClose }: TradeDetailMo
             {position.name && position.name !== position.symbol && (
               <span className="td-name">{position.name}</span>
             )}
+            {(position.zoneKind || position.zoneGrade || position.signalStrength) && (
+              <span className="bt-signal td-signal">
+                {position.zoneKind && (
+                  <span className={`bt-zone-badge bt-zone-${position.zoneKind}`}>
+                    {position.zoneKind === 'supply' ? 'Supply' : 'Demand'}
+                  </span>
+                )}
+                {position.zoneGrade && (
+                  <span className="bt-signal-tag" title="Basing-zone quality grade">
+                    base {position.zoneGrade}
+                  </span>
+                )}
+                {position.signalStrength && (
+                  <span className="bt-signal-tag" title="Explosive-move (signal) strength">
+                    {position.signalStrength}
+                  </span>
+                )}
+              </span>
+            )}
           </div>
           <div className="td-price-group">
             {livePrice !== null && (
@@ -184,6 +203,7 @@ export function TradeDetailModal({ position, livePrice, onClose }: TradeDetailMo
           ))}
           <span className="tl-legend-meta">
             {position.shares} sh{rrLabel ? ` · ${rrLabel} R` : ''} · {position.orderType}
+            {position.signalDate ? ` · signal ${position.signalDate}` : ''}
           </span>
         </div>
 

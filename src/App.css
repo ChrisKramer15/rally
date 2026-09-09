@@ -2970,6 +2970,115 @@
   border: 1px solid rgba(255, 77, 109, 0.3);
 }
 
+/* ---------- Backtest: signal provenance badges ---------- */
+/* The zone/signal a trade was placed from: direction (demand/supply), base
+   grade, and explosive-move strength. Sits under the shares line on each row
+   and in the trade-detail modal header. */
+.bt-signal {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 3px;
+}
+.td-signal {
+  margin-top: 0;
+  margin-left: 8px;
+}
+.bt-zone-badge {
+  font-family: var(--sans);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  vertical-align: middle;
+}
+.bt-zone-demand {
+  color: var(--neon-green);
+  background: rgba(41, 255, 176, 0.1);
+  border: 1px solid rgba(41, 255, 176, 0.28);
+}
+.bt-zone-supply {
+  color: var(--neon-red);
+  background: rgba(255, 77, 109, 0.1);
+  border: 1px solid rgba(255, 77, 109, 0.28);
+}
+.bt-signal-tag {
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: var(--neon-cyan);
+  background: rgba(120, 220, 255, 0.08);
+  border: 1px solid rgba(120, 220, 255, 0.25);
+  vertical-align: middle;
+}
+
+/* ---------- Backtest: closed-trades group-by ---------- */
+.bt-groupby {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.bt-groupby-label {
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--muted);
+}
+.bt-groupby-seg {
+  flex: 0 0 auto;
+}
+
+/* A grouped bucket: a header with win-rate + net P/L, then its trade rows. */
+.bt-group {
+  margin-bottom: 14px;
+}
+.bt-group-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  margin-bottom: 2px;
+  border-radius: 6px;
+  background: rgba(120, 220, 255, 0.05);
+  border: 1px solid rgba(120, 220, 255, 0.12);
+}
+.bt-group-label {
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  color: var(--text-h);
+}
+.bt-group-stats {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 12px;
+}
+.bt-group-winrate {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+.bt-group-net {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+}
+.bt-group-net.up {
+  color: var(--neon-green);
+}
+.bt-group-net.down {
+  color: var(--neon-red);
+}
+
 /* ---------- Backtest: clickable rows ---------- */
 /* Open + pending rows open the trade-detail chart modal on click. The close /
    cancel button inside stops propagation so it doesn't also open the modal. */

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { changePct } from './data/stocks'
 import { loadCached } from './data/dailyCache'
-import { detectBasesForBars } from './hooks/useBasingZones'
+import { detectBasesForBars, type ZoneGrade, type ZoneKind } from './hooks/useBasingZones'
+import { gradeExplosiveAt, type ExplosiveGrade } from './hooks/useExplosiveMoves'
 import { useIndexMarket } from './hooks/useIndexMarket'
 import { useWatchlist } from './hooks/useWatchlist'
 import { useWatchlistMarket } from './hooks/useWatchlistMarket'
@@ -71,7 +72,20 @@ function App() {
   //   • kind     → the signal's direction: a demand zone (explosive up move)
   //                defaults the ticket to Long; a supply zone (down move) to
   //                Short. The user can still override in the ticket.
-  const tradeZone = useMemo<{ proximal: number; distal: number; atr?: number; side: TradeSide; swingTarget?: number } | null>(() => {
+  // Signal provenance carried through to the placed trade (shown on Backtest):
+  //   • kind + grade (base quality) + strength (explosive-candle grade, graded
+  //     by the zone's explosive date) + the proximal line + explosive date.
+  const tradeZone = useMemo<{
+    proximal: number
+    distal: number
+    atr?: number
+    side: TradeSide
+    swingTarget?: number
+    kind: ZoneKind
+    grade: ZoneGrade
+    strength?: ExplosiveGrade
+    signalDate: string
+  } | null>(() => {
     if (!tradeSymbol) return null
     const cached = loadCached([tradeSymbol])[tradeSymbol]
     if (!cached || cached.bars.length === 0) return null
@@ -84,6 +98,10 @@ function App() {
       atr: atrFromBars(cached.bars),
       side: latest.kind === 'supply' ? 'short' : 'long',
       swingTarget: latest.swingTarget ?? undefined,
+      kind: latest.kind,
+      grade: latest.grade,
+      strength: gradeExplosiveAt(cached.bars, latest.explosiveDate) ?? undefined,
+      signalDate: latest.explosiveDate,
     }
   }, [tradeSymbol])
 
@@ -101,6 +119,11 @@ function App() {
       distal: tradeZone?.distal,
       atr: tradeZone?.atr,
       swingTarget: tradeZone?.swingTarget,
+      zoneKind: tradeZone?.kind,
+      zoneGrade: tradeZone?.grade,
+      signalStrength: tradeZone?.strength,
+      proximal: tradeZone?.proximal,
+      signalDate: tradeZone?.signalDate,
     })
     setTradeSymbol(null)
     setView('backtest')

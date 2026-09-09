@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { ZoneGrade, ZoneKind } from './useBasingZones'
+import type { ExplosiveGrade } from './useExplosiveMoves'
 import {
   deleteTrade as deleteTradeRemote,
   deleteTrades as deleteTradesRemote,
@@ -100,6 +102,36 @@ export interface BacktestPosition {
   /** ATR at order time, for sizing the stop buffer beyond the distal line. */
   atr?: number
   /**
+   * ── Signal provenance ──────────────────────────────────────────────────
+   * The basing zone this trade was placed from, captured at order time so the
+   * Backtest screen can show which signal it came from. All nullable/optional:
+   * a trade placed with no detected zone (or one migrated from an older save)
+   * simply has none of these.
+   */
+  /**
+   * Zone direction / signal type: 'demand' (explosive up move → long bias) or
+   * 'supply' (down move → short bias). Stored independently of `side` so the
+   * original signal direction survives even if the user flipped the side in
+   * the ticket.
+   */
+  zoneKind?: ZoneKind
+  /** Zone quality grade at order time ('A+' | 'good' | 'weak'). */
+  zoneGrade?: ZoneGrade
+  /**
+   * Signal strength — the explosive-candle grade ('A+' | 'strong') of the move
+   * that anchored the zone, captured at order time. This is the same "signal
+   * strength" the Signals scan shows. Distinct from `zoneGrade` (base quality).
+   */
+  signalStrength?: ExplosiveGrade
+  /**
+   * The zone's proximal line (the entry edge) captured at order time. Unlike
+   * `limitPrice` this is recorded for market orders too, so the signal's entry
+   * line is always available for display. Undefined when no zone was detected.
+   */
+  proximalPrice?: number
+  /** The zone's explosive move-away date (YYYY-MM-DD) — the signal's origin. */
+  signalDate?: string
+  /**
    * Top of the prior trend leg (swing high for a long, swing low for a short),
    * captured at order time. Anchors the cash-out target. Undefined when the
    * symbol had no measurable leg after its zone.
@@ -136,6 +168,22 @@ export interface ClosedTrade {
   realizedPnl: number
   openedDate: string | null
   closedDate: string
+  /**
+   * ── Signal provenance (carried over from the position at close) ──────────
+   * Mirrors the same fields on BacktestPosition so a reviewer can correlate
+   * outcomes with the signal a trade came from. All nullable: trades closed
+   * before this was tracked (or placed with no detected zone) have none.
+   */
+  /** Zone direction / signal type: 'demand' (long bias) | 'supply' (short). */
+  zoneKind?: ZoneKind
+  /** Basing-zone quality grade at order time ('A+' | 'good' | 'weak'). */
+  zoneGrade?: ZoneGrade
+  /** Explosive-move (signal) strength ('A+' | 'strong'). */
+  signalStrength?: ExplosiveGrade
+  /** The zone's proximal (entry) line captured at order time. */
+  proximalPrice?: number
+  /** The zone's explosive move-away date (YYYY-MM-DD). */
+  signalDate?: string
 }
 
 interface PersistShape {
@@ -274,6 +322,16 @@ export interface OpenTradeInput {
   swingTarget?: number
   /** Optional fallback reward-to-risk multiple (defaults to DEFAULT_RISK_REWARD). */
   riskReward?: number
+  /** Signal provenance — the basing zone this trade was placed from. */
+  zoneKind?: ZoneKind
+  /** Zone quality grade at order time. */
+  zoneGrade?: ZoneGrade
+  /** Signal strength — explosive-candle grade ('A+' | 'strong'). */
+  signalStrength?: ExplosiveGrade
+  /** The zone's proximal (entry) line, recorded for market orders too. */
+  proximal?: number
+  /** The zone's explosive move-away date (YYYY-MM-DD). */
+  signalDate?: string
 }
 
 export function useBacktestPortfolio() {
@@ -366,6 +424,11 @@ export function useBacktestPortfolio() {
           distalPrice: input.distal,
           atr: input.atr,
           swingTarget: input.swingTarget,
+          zoneKind: input.zoneKind,
+          zoneGrade: input.zoneGrade,
+          signalStrength: input.signalStrength,
+          proximalPrice: input.proximal,
+          signalDate: input.signalDate,
           riskReward,
           shares,
           ...levels,
@@ -397,6 +460,11 @@ export function useBacktestPortfolio() {
         distalPrice: input.distal,
         atr: input.atr,
         swingTarget: input.swingTarget,
+        zoneKind: input.zoneKind,
+        zoneGrade: input.zoneGrade,
+        signalStrength: input.signalStrength,
+        proximalPrice: input.proximal,
+        signalDate: input.signalDate,
         riskReward,
         shares,
         ...levels,
@@ -527,6 +595,11 @@ export function useBacktestPortfolio() {
           realizedPnl,
           openedDate: p.openedDate,
           closedDate: todayISO(),
+          zoneKind: p.zoneKind,
+          zoneGrade: p.zoneGrade,
+          signalStrength: p.signalStrength,
+          proximalPrice: p.proximalPrice,
+          signalDate: p.signalDate,
         })
       }
 
@@ -586,6 +659,11 @@ export function useBacktestPortfolio() {
         realizedPnl,
         openedDate: pos.openedDate,
         closedDate: todayISO(),
+        zoneKind: pos.zoneKind,
+        zoneGrade: pos.zoneGrade,
+        signalStrength: pos.signalStrength,
+        proximalPrice: pos.proximalPrice,
+        signalDate: pos.signalDate,
       }
       // Realized P/L compounds into the cash base (true-portfolio behavior):
       // a banked gain grows what you can deploy next, a loss shrinks it.
