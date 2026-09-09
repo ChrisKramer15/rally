@@ -12,6 +12,66 @@
 import { getSupabase, type PriceRow } from './supabaseClient'
 import type { DailyBar } from './tiingo'
 
+/** Debounce window for coalescing a burst of prices writes into one notify. */
+const REALTIME_DEBOUNCE_MS = 1_500
+
+/**
+ * Subscribe to new/updated rows in the `prices` table (Supabase Realtime).
+ *
+ * Whenever the server-side collector writes bars, Postgres streams the change
+ * to subscribed browsers. We collect the affected symbols and, after a short
+ * debounce (to coalesce a burst of inserts into one batch), hand them to
+ * `onSymbols`. The caller re-reads those symbols — bypassing the trading-day
+ * freshness gate — so the analysis recomputes as soon as new bars land.
+ *
+ * Requires the `prices` table to be in the `supabase_realtime` publication
+ * (migration 0010). No-op (returns a noop unsubscribe) when Supabase is off.
+ *
+ * @returns an unsubscribe function to tear the channel + timer down.
+ */
+export function subscribeToPriceUpdates(
+  onSymbols: (symbols: string[]) => void,
+): () => void {
+  const supabase = getSupabase()
+  if (!supabase) return () => {}
+
+  const pending = new Set<string>()
+  let timer: ReturnType<typeof setTimeout> | null = null
+
+  const flush = () => {
+    timer = null
+    if (pending.size === 0) return
+    const batch = Array.from(pending)
+    pending.clear()
+    onSymbols(batch)
+  }
+
+  const queue = (symbol: string | undefined) => {
+    if (!symbol) return
+    pending.add(symbol)
+    if (timer === null) timer = setTimeout(flush, REALTIME_DEBOUNCE_MS)
+  }
+
+  const channel = supabase
+    .channel('prices-changes')
+    .on(
+      'postgres_changes',
+      { event: 'INSERT', schema: 'public', table: 'prices' },
+      (payload) => queue((payload.new as Partial<PriceRow>)?.symbol),
+    )
+    .on(
+      'postgres_changes',
+      { event: 'UPDATE', schema: 'public', table: 'prices' },
+      (payload) => queue((payload.new as Partial<PriceRow>)?.symbol),
+    )
+    .subscribe()
+
+  return () => {
+    if (timer !== null) clearTimeout(timer)
+    void supabase.removeChannel(channel)
+  }
+}
+
 /** Max bars to read per symbol (matches the cache's retention target). */
 const READ_LIMIT = 260
 

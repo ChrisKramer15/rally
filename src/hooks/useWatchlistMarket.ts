@@ -12,6 +12,7 @@ import { hasSupabase } from '../data/supabaseClient'
 import {
   fetchDailyBarsFromSupabase,
   fetchNameFromSupabase,
+  subscribeToPriceUpdates,
 } from '../data/supabaseDailyStore'
 import { HISTORY_LEN } from '../data/historyStore'
 import { INITIAL_STOCKS, MAX_WATCHLIST, MAX_WATCHLISTS, type Stock } from '../data/stocks'
@@ -115,6 +116,14 @@ export function useWatchlistMarket(symbols: string[]): UseWatchlistMarketResult 
   const capped = symbols.slice(0, MAX_UNION_SYMBOLS)
   const symbolsKey = capped.join(',')
 
+  // The current watchlist union, kept in a ref so the long-lived realtime
+  // subscription can filter incoming symbols without re-subscribing on every
+  // watchlist change.
+  const symbolSetRef = useRef<Set<string>>(new Set(capped))
+  useEffect(() => {
+    symbolSetRef.current = new Set(symbolsKey ? symbolsKey.split(',') : [])
+  }, [symbolsKey])
+
   // Merge a batch of freshly built stocks into state, computing up/down flashes.
   const applyStocks = useCallback((incoming: Stock[]) => {
     setStocks((prev) => {
@@ -138,6 +147,45 @@ export function useWatchlistMarket(symbols: string[]): UseWatchlistMarketResult 
   // overlapping with the new one — otherwise restarts kept re-prioritizing the
   // head of the list and the tail (~188 symbols) never finished caching.
   const loadTokenRef = useRef(0)
+
+  // Read a specific list of symbols from Supabase and merge them into state.
+  // Shared by the freshness-gated refresh and the realtime-driven force read.
+  // `isStale` lets a caller abort the loop when a newer run supersedes it.
+  const readSymbolsFromSupabase = useCallback(
+    async (
+      symbolsToRead: string[],
+      cachedNames: Record<string, { name?: string }>,
+      isStale: () => boolean,
+    ): Promise<string | null> => {
+      let hitError: string | null = null
+      // Reads hit Supabase (our own DB, CORS-safe, no external rate limit).
+      const concurrency = 6
+      for (let i = 0; i < symbolsToRead.length; i += concurrency) {
+        if (isStale()) return hitError
+        const batch = symbolsToRead.slice(i, i + concurrency)
+        const built: Stock[] = []
+        await Promise.all(
+          batch.map(async (sym) => {
+            try {
+              const [bars, name] = await Promise.all([
+                fetchDailyBarsFromSupabase(sym),
+                resolveName(sym, cachedNames[sym]?.name),
+              ])
+              if (bars.length === 0) return // no rows yet: skip
+              saveSymbol(sym, bars, name)
+              built.push(barsToStock(sym, name, bars))
+            } catch (e) {
+              hitError = e instanceof Error ? e.message : 'Failed to read daily bars.'
+            }
+          }),
+        )
+        if (built.length) applyStocks(built)
+        setUsage(usageSnapshot())
+      }
+      return hitError
+    },
+    [applyStocks],
+  )
 
   const refresh = useCallback(async () => {
     const syms = symbolsKey ? symbolsKey.split(',') : []
@@ -179,38 +227,11 @@ export function useWatchlistMarket(symbols: string[]): UseWatchlistMarketResult 
     }
 
     setStatus('loading')
-    let hitError: string | null = null
 
-    // Watchlist order = read priority (Tier 1 first). Reads hit Supabase (our
-    // own DB, CORS-safe, no external rate limit), so concurrency can be higher.
-    const concurrency = 6
-    for (let i = 0; i < stale.length; i += concurrency) {
-      // A newer refresh (symbol set changed, or unmount) superseded us — stop so
-      // we don't compete with it or thrash state. The newer run reads the rest.
-      if (isStale()) return
-
-      const batch = stale.slice(i, i + concurrency)
-      const built: Stock[] = []
-      await Promise.all(
-        batch.map(async (sym) => {
-          try {
-            const [bars, name] = await Promise.all([
-              fetchDailyBarsFromSupabase(sym),
-              resolveName(sym, cached[sym]?.name),
-            ])
-            if (bars.length === 0) return // no rows yet (collector hasn't run): skip
-            saveSymbol(sym, bars, name)
-            built.push(barsToStock(sym, name, bars))
-          } catch (e) {
-            hitError = e instanceof Error ? e.message : 'Failed to read daily bars.'
-          }
-        }),
-      )
-      // saveSymbol already persisted to the cache above, so even if this run is
-      // superseded right after, the bars are cached and won't be re-read.
-      if (built.length) applyStocks(built)
-      setUsage(usageSnapshot())
-    }
+    // Watchlist order = read priority (Tier 1 first). saveSymbol persists each
+    // symbol as it's read, so even if this run is superseded the bars are cached
+    // and won't be re-read.
+    const hitError = await readSymbolsFromSupabase(stale, cached, isStale)
 
     if (isStale()) return
 
@@ -221,7 +242,7 @@ export function useWatchlistMarket(symbols: string[]): UseWatchlistMarketResult 
       setStatus('live')
       setError(null)
     }
-  }, [symbolsKey, applyStocks])
+  }, [symbolsKey, applyStocks, readSymbolsFromSupabase])
 
   // Initial load + refresh whenever the symbol set changes.
   useEffect(() => {
@@ -254,6 +275,34 @@ export function useWatchlistMarket(symbols: string[]): UseWatchlistMarketResult 
     }, FRESHNESS_CHECK_MS)
     return () => window.clearInterval(id)
   }, [refresh])
+
+  // Realtime: when the collector writes new bars to `prices`, re-read the
+  // affected symbols IMMEDIATELY, bypassing the trading-day freshness gate, so
+  // the signals recompute the moment new data lands (rather than waiting for
+  // the next post-close rollover). Filtered to the current watchlist union so
+  // we don't read symbols the dashboard isn't showing. Subscribed once for the
+  // hook's lifetime; the symbol filter reads from a ref.
+  useEffect(() => {
+    if (!hasSupabase()) return
+    const unsubscribe = subscribeToPriceUpdates((changed) => {
+      const relevant = changed.filter((sym) => symbolSetRef.current.has(sym))
+      if (relevant.length === 0) return
+      // Force read: skip partitionByFreshness so a mid-session write is honored
+      // even when the symbol is already stamped fresh for today. A fresh read +
+      // saveSymbol updates the cache, which drives the signal recompute.
+      const cachedNames = loadCached(relevant)
+      void readSymbolsFromSupabase(relevant, cachedNames, () => false).then((hitError) => {
+        if (hitError) {
+          setStatus('error')
+          setError(hitError)
+        } else {
+          setStatus('live')
+          setError(null)
+        }
+      })
+    })
+    return unsubscribe
+  }, [readSymbolsFromSupabase])
 
   return { stocks, flash, lastUpdated, status, error, usage, refresh }
 }
