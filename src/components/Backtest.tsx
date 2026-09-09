@@ -210,11 +210,16 @@ function PendingOrderRow({
   )
 }
 
+/** Which bucket of trades the Backtest table is showing. */
+type TradeView = 'pending' | 'active' | 'closed'
+
 export function Backtest({ stocks, portfolio }: BacktestProps) {
   const { budget, positions, closed, setBudget, closePosition, resetPortfolio } = portfolio
   const [budgetDraft, setBudgetDraft] = useState<string>(String(budget))
   // Id of the position whose chart/level detail modal is open (null = closed).
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  // Which trade bucket the table shows. Defaults to active (filled positions).
+  const [view, setView] = useState<TradeView>('active')
 
   // Resolve the live selected position from the current positions list so it
   // stays in sync if the underlying data changes (e.g. a pending order fills).
@@ -306,135 +311,196 @@ export function Backtest({ stocks, portfolio }: BacktestProps) {
         </div>
       </div>
 
+      {/* ── View toggle: pending / active / closed ── */}
+      <div className="bt-view-bar panel">
+        <div className="tt-seg bt-view-seg" role="tablist" aria-label="Trade view">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === 'pending'}
+            className={`tt-seg-btn ${view === 'pending' ? 'active' : ''}`}
+            onClick={() => setView('pending')}
+          >
+            Pending <span className="bt-view-count">{pendingOrders.length}</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === 'active'}
+            className={`tt-seg-btn ${view === 'active' ? 'active' : ''}`}
+            onClick={() => setView('active')}
+          >
+            Active <span className="bt-view-count">{openPositions.length}</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === 'closed'}
+            className={`tt-seg-btn ${view === 'closed' ? 'active' : ''}`}
+            onClick={() => setView('closed')}
+          >
+            Closed <span className="bt-view-count">{closed.length}</span>
+          </button>
+        </div>
+        {positions.length > 0 && (
+          <button className="bt-reset-btn" onClick={resetPortfolio} title="Clear all positions and reset budget">
+            Reset portfolio
+          </button>
+        )}
+      </div>
+
       {/* ── Pending orders (limit) ── */}
-      {pendingOrders.length > 0 && (
+      {view === 'pending' && (
         <div className="panel bt-table-panel">
           <div className="bt-table-head-row">
             <h3 className="bt-section-title">Pending Orders ({pendingOrders.length})</h3>
             <span className="bt-reserved">${formatCurrency(reserved)} reserved</span>
           </div>
 
+          {pendingOrders.length === 0 ? (
+            <div className="bt-empty">
+              <span className="bt-empty-icon">⏳</span>
+              <span>
+                No pending orders. Place a <strong>limit</strong> order from the Trade ticket and it
+                rests here until price reaches the proximal line.
+              </span>
+            </div>
+          ) : (
+            <>
+              <div className="bt-row bt-row-head">
+                <div className="bt-col-date">Placed</div>
+                <div className="bt-col-sym">Ticker</div>
+                <div className="bt-col-num">Order</div>
+                <div className="bt-col-num bt-col-wide">Trigger</div>
+                <div className="bt-col-num">Stop-loss</div>
+                <div className="bt-col-num">Cash-out</div>
+                <div className="bt-col-action"></div>
+              </div>
+
+              <ul className="bt-list" aria-label="Pending orders">
+                {pendingOrders.map((p) => (
+                  <PendingOrderRow
+                    key={p.id}
+                    position={p}
+                    stocks={stocks}
+                    onCancel={closePosition}
+                    onSelect={(pos) => setSelectedId(pos.id)}
+                  />
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ── Active (open) positions ── */}
+      {view === 'active' && (
+        <div className="panel bt-table-panel">
+          <div className="bt-table-head-row">
+            <h3 className="bt-section-title">Active Positions ({openPositions.length})</h3>
+          </div>
+
           <div className="bt-row bt-row-head">
-            <div className="bt-col-date">Placed</div>
+            <div className="bt-col-date">Date opened</div>
             <div className="bt-col-sym">Ticker</div>
-            <div className="bt-col-num">Order</div>
-            <div className="bt-col-num bt-col-wide">Trigger</div>
+            <div className="bt-col-num">Trade cost</div>
+            <div className="bt-col-num">Current cost</div>
             <div className="bt-col-num">Stop-loss</div>
             <div className="bt-col-num">Cash-out</div>
             <div className="bt-col-action"></div>
           </div>
 
-          <ul className="bt-list" aria-label="Pending orders">
-            {pendingOrders.map((p) => (
-              <PendingOrderRow
-                key={p.id}
-                position={p}
-                stocks={stocks}
-                onCancel={closePosition}
-                onSelect={(pos) => setSelectedId(pos.id)}
-              />
-            ))}
-          </ul>
+          {openPositions.length === 0 ? (
+            <div className="bt-empty">
+              <span className="bt-empty-icon">📈</span>
+              <span>
+                No active positions yet. Open a ticker from Signals or your watchlist and hit
+                <strong> Trade</strong> to add one here.
+              </span>
+            </div>
+          ) : (
+            <ul className="bt-list" aria-label="Active positions">
+              {openPositions.map((p) => (
+                <OpenPositionRow
+                  key={p.id}
+                  position={p}
+                  stocks={stocks}
+                  onClose={closePosition}
+                  onSelect={(pos) => setSelectedId(pos.id)}
+                />
+              ))}
+            </ul>
+          )}
         </div>
       )}
 
-      {/* ── Open positions ── */}
-      <div className="panel bt-table-panel">
-        <div className="bt-table-head-row">
-          <h3 className="bt-section-title">Open Positions ({openPositions.length})</h3>
-          {positions.length > 0 && (
-            <button className="bt-reset-btn" onClick={resetPortfolio} title="Clear all positions and reset budget">
-              Reset portfolio
-            </button>
-          )}
-        </div>
-
-        <div className="bt-row bt-row-head">
-          <div className="bt-col-date">Date opened</div>
-          <div className="bt-col-sym">Ticker</div>
-          <div className="bt-col-num">Trade cost</div>
-          <div className="bt-col-num">Current cost</div>
-          <div className="bt-col-num">Stop-loss</div>
-          <div className="bt-col-num">Cash-out</div>
-          <div className="bt-col-action"></div>
-        </div>
-
-        {openPositions.length === 0 ? (
-          <div className="bt-empty">
-            <span className="bt-empty-icon">📈</span>
-            <span>
-              No open positions yet. Open a ticker from Signals or your watchlist and hit
-              <strong> Trade</strong> to add one here.
-            </span>
-          </div>
-        ) : (
-          <ul className="bt-list" aria-label="Open positions">
-            {openPositions.map((p) => (
-              <OpenPositionRow
-                key={p.id}
-                position={p}
-                stocks={stocks}
-                onClose={closePosition}
-                onSelect={(pos) => setSelectedId(pos.id)}
-              />
-            ))}
-          </ul>
-        )}
-      </div>
-
       {/* ── Closed trades (realized P/L history) ── */}
-      {closed.length > 0 && (
+      {view === 'closed' && (
         <div className="panel bt-table-panel">
           <div className="bt-table-head-row">
             <h3 className="bt-section-title">Closed Trades ({closed.length})</h3>
-            <span className={`bt-reserved ${realizedUp ? 'up' : 'down'}`}>
-              {realizedUp ? '+' : ''}${formatCurrency(realizedPnl)} realized
-            </span>
+            {closed.length > 0 && (
+              <span className={`bt-reserved ${realizedUp ? 'up' : 'down'}`}>
+                {realizedUp ? '+' : ''}${formatCurrency(realizedPnl)} realized
+              </span>
+            )}
           </div>
 
-          <div className="bt-closed-row bt-row-head">
-            <div className="bt-col-date">Closed</div>
-            <div className="bt-col-sym">Ticker</div>
-            <div className="bt-col-num">Entry</div>
-            <div className="bt-col-num">Exit</div>
-            <div className="bt-col-num">Realized</div>
-          </div>
+          {closed.length === 0 ? (
+            <div className="bt-empty">
+              <span className="bt-empty-icon">🧾</span>
+              <span>
+                No closed trades yet. Positions land here once they hit their cash-out or stop-loss,
+                or when you close them early.
+              </span>
+            </div>
+          ) : (
+            <>
+              <div className="bt-closed-row bt-row-head">
+                <div className="bt-col-date">Closed</div>
+                <div className="bt-col-sym">Ticker</div>
+                <div className="bt-col-num">Entry</div>
+                <div className="bt-col-num">Exit</div>
+                <div className="bt-col-num">Realized</div>
+              </div>
 
-          <ul className="bt-list" aria-label="Closed trades">
-            {closed.map((t) => {
-              const up = t.realizedPnl >= 0
-              const cost = t.entryPrice * t.shares
-              const pct = cost > 0 ? (t.realizedPnl / cost) * 100 : 0
-              return (
-                <li key={t.id} className="bt-closed-row">
-                  <div className="bt-col-date">{t.closedDate}</div>
-                  <div className="bt-col-sym">
-                    <span className="bt-sym">
-                      {t.symbol}
-                      <span className={`bt-side-badge ${t.side === 'short' ? 'bt-side-short' : 'bt-side-long'}`}>
-                        {t.side === 'short' ? 'SHORT' : 'LONG'}
-                      </span>
-                    </span>
-                    <span className="bt-shares">{t.shares} sh</span>
-                  </div>
-                  <div className="bt-col-num" data-label="Entry">
-                    <span className="bt-sub">${formatCurrency(t.entryPrice)}</span>
-                  </div>
-                  <div className="bt-col-num" data-label="Exit">
-                    <span className="bt-sub">${formatCurrency(t.exitPrice)}</span>
-                  </div>
-                  <div className="bt-col-num" data-label="Realized">
-                    <span className={`bt-cost ${up ? 'up' : 'down'}`}>
-                      {up ? '+' : ''}${formatCurrency(t.realizedPnl)}
-                    </span>
-                    <span className={`bt-sub ${up ? 'up' : 'down'}`}>
-                      {up ? '+' : ''}{pct.toFixed(2)}%
-                    </span>
-                  </div>
-                </li>
-              )
-            })}
-          </ul>
+              <ul className="bt-list" aria-label="Closed trades">
+                {closed.map((t) => {
+                  const up = t.realizedPnl >= 0
+                  const cost = t.entryPrice * t.shares
+                  const pct = cost > 0 ? (t.realizedPnl / cost) * 100 : 0
+                  return (
+                    <li key={t.id} className="bt-closed-row">
+                      <div className="bt-col-date">{t.closedDate}</div>
+                      <div className="bt-col-sym">
+                        <span className="bt-sym">
+                          {t.symbol}
+                          <span className={`bt-side-badge ${t.side === 'short' ? 'bt-side-short' : 'bt-side-long'}`}>
+                            {t.side === 'short' ? 'SHORT' : 'LONG'}
+                          </span>
+                        </span>
+                        <span className="bt-shares">{t.shares} sh</span>
+                      </div>
+                      <div className="bt-col-num" data-label="Entry">
+                        <span className="bt-sub">${formatCurrency(t.entryPrice)}</span>
+                      </div>
+                      <div className="bt-col-num" data-label="Exit">
+                        <span className="bt-sub">${formatCurrency(t.exitPrice)}</span>
+                      </div>
+                      <div className="bt-col-num" data-label="Realized">
+                        <span className={`bt-cost ${up ? 'up' : 'down'}`}>
+                          {up ? '+' : ''}${formatCurrency(t.realizedPnl)}
+                        </span>
+                        <span className={`bt-sub ${up ? 'up' : 'down'}`}>
+                          {up ? '+' : ''}{pct.toFixed(2)}%
+                        </span>
+                      </div>
+                    </li>
+                  )
+                })}
+              </ul>
+            </>
+          )}
         </div>
       )}
 

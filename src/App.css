@@ -2406,6 +2406,35 @@
   border-color: rgba(255, 77, 109, 0.4);
 }
 
+/* View toggle bar: pending / active / closed segmented control + reset. */
+.bt-view-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+}
+.bt-view-seg {
+  flex: 1;
+}
+/* Count badge inside each toggle tab. */
+.bt-view-count {
+  display: inline-block;
+  min-width: 18px;
+  margin-left: 6px;
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  border-radius: 9px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.06);
+}
+.tt-seg-btn.active .bt-view-count {
+  color: #fff;
+  background: rgba(0, 0, 0, 0.25);
+}
+
 .bt-list {
   list-style: none;
   margin: 0;
