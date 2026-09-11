@@ -33,8 +33,21 @@
 
 import { useMemo } from 'react'
 import { loadCached } from '../data/dailyCache'
+import { effectiveTradingDay } from '../data/marketCalendar'
 import type { Stock } from '../data/stocks'
 import type { DailyBar } from '../data/tiingo'
+
+/**
+ * Calendar days between two YYYY-MM-DD dates (b - a). Uses a UTC-noon anchor so
+ * DST transitions never shift the count. Positive when `b` is after `a`.
+ */
+function calendarDaysBetween(a: string, b: string): number {
+  const [ay, am, ad] = a.split('-').map(Number)
+  const [by, bm, bd] = b.split('-').map(Number)
+  const aMs = Date.UTC(ay, am - 1, ad, 12, 0, 0)
+  const bMs = Date.UTC(by, bm - 1, bd, 12, 0, 0)
+  return Math.round((bMs - aMs) / 86_400_000)
+}
 
 export type ExplosiveGrade = 'A+' | 'strong'
 
@@ -57,7 +70,10 @@ export interface ExplosiveCandle {
   prevClose: number
   /** Age in trading bars from the symbol's most recent bar (0 = latest bar). */
   ageBars: number
-  /** True when this candle is within the freshness window (an actionable signal). */
+  /**
+   * True when this candle is within the freshness window — measured in CALENDAR
+   * days from today's effective trading day (an actionable signal).
+   */
   isFresh: boolean
 }
 
@@ -86,11 +102,11 @@ export interface UseExplosiveMovesResult {
 const DEFAULT_MOVE_MULTIPLE = 2.0
 
 /**
- * A qualifying candle counts as a *fresh* (actionable) signal when it's within
- * this many trading bars of the symbol's most recent bar. Older candles remain
- * in history for context but are treated as stale.
+ * A qualifying candle counts as a *fresh* (actionable) signal when its date is
+ * within this many CALENDAR days of today's effective trading day. Older candles
+ * remain in history for context but are treated as stale.
  */
-const DEFAULT_FRESHNESS_DAYS = 90
+const DEFAULT_FRESHNESS_DAYS = 10
 
 /** Body-to-range ratio floor for any qualifying candle. */
 const MIN_BODY_RATIO = 0.6
@@ -188,6 +204,12 @@ export function useExplosiveMoves(
     const symbols = stocks.map((s) => s.symbol)
     const cached = loadCached(symbols)
 
+    // Freshness is measured in CALENDAR days from the latest FINAL trading day
+    // (a true "today"), NOT in trading bars and NOT from each symbol's own last
+    // cached bar. Anchoring to effectiveTradingDay keeps freshness honest even
+    // when a symbol's collection lagged (its newest bar could be days old).
+    const todayTradingDay = effectiveTradingDay()
+
     let skippedCount = 0
     let uncachedCount = 0
     const moves: ExplosiveMove[] = []
@@ -242,7 +264,10 @@ export function useExplosiveMoves(
         const rangePct = (totalRange / prev.close) * 100
 
         const ageBars = lastIdx - i
-        const isFresh = ageBars < freshnessDays
+        // Fresh when the explosive candle's date is within `freshnessDays`
+        // CALENDAR days of today (e.g. 90 ≈ 3 months), inclusive.
+        const ageDays = calendarDaysBetween(bar.date, todayTradingDay)
+        const isFresh = ageDays <= freshnessDays
 
         const candle: ExplosiveCandle = {
           date: bar.date,

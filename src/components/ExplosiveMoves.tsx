@@ -294,7 +294,11 @@ function MoveRow({
 
 export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: ExplosiveMovesProps) {
   const [moveMultiple, setMoveMultiple] = useState(2)
-  const [freshnessDays, setFreshnessDays] = useState(90)
+  const [freshnessDays, setFreshnessDays] = useState(10)
+  // Raw text mirror of the freshness box so the field always displays exactly
+  // what's typed. Without this, typing e.g. "010" stays stuck: Number("010")
+  // === 10 === current state, so no re-render fires and the DOM keeps the "0".
+  const [freshnessText, setFreshnessText] = useState('10')
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
 
   // Persistent user filters — stay put until changed or cleared, even across
@@ -420,7 +424,7 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
         <div className="em-header-left">
           <h2>Explosive Moves</h2>
           <p className="em-subtitle">
-            Fresh signals: a ≥{moveMultiple}× ATR move with ≥60% body in the last {freshnessDays} trading
+            Fresh signals: a ≥{moveMultiple}× ATR move with ≥60% body in the last {freshnessDays} calendar
             days, backed by a fresh (unused) supply/demand zone. Orange = A+ (clean body + volume surge).
           </p>
         </div>
@@ -452,9 +456,21 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
                 min={1}
                 max={120}
                 step={1}
-                value={freshnessDays}
-                onChange={(e) => setFreshnessDays(Number(e.target.value))}
-                aria-label="Freshness window in trading days"
+                value={freshnessText}
+                onChange={(e) => {
+                  const raw = e.target.value
+                  setFreshnessText(raw)
+                  const n = Number(raw)
+                  if (raw !== '' && Number.isFinite(n)) {
+                    setFreshnessDays(Math.min(120, Math.max(1, Math.round(n))))
+                  }
+                }}
+                onBlur={() => {
+                  // Snap the visible text back to the canonical clamped number,
+                  // clearing any leading zeros or out-of-range entry.
+                  setFreshnessText(String(freshnessDays))
+                }}
+                aria-label="Freshness window in calendar days"
               />
               <span className="em-control-unit">days</span>
             </div>
