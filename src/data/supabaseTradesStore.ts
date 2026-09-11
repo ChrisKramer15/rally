@@ -62,6 +62,13 @@ interface ClosedTradeRow {
   signal_strength: 'A+' | 'strong' | null
   proximal_price: number | string | null
   signal_date: string | null
+  order_type: 'market' | 'limit' | null
+  limit_price: number | string | null
+  distal_price: number | string | null
+  stop_loss_price: number | string | null
+  cash_out_price: number | string | null
+  placed_date: string | null
+  placed_at: string | null
 }
 
 /** Numeric columns come back as strings from PG numeric; coerce defensively. */
@@ -118,6 +125,13 @@ function rowToClosed(r: ClosedTradeRow): ClosedTrade {
     signalStrength: r.signal_strength ?? undefined,
     proximalPrice: num(r.proximal_price),
     signalDate: r.signal_date ?? undefined,
+    orderType: r.order_type ?? undefined,
+    limitPrice: num(r.limit_price),
+    distalPrice: num(r.distal_price),
+    stopLossPrice: num(r.stop_loss_price),
+    cashOutPrice: num(r.cash_out_price),
+    placedDate: r.placed_date ?? undefined,
+    placedAt: r.placed_at ?? undefined,
   }
 }
 
@@ -168,6 +182,13 @@ function closedToRow(t: ClosedTrade): ClosedTradeRow {
     signal_strength: t.signalStrength ?? null,
     proximal_price: t.proximalPrice ?? null,
     signal_date: t.signalDate ?? null,
+    order_type: t.orderType ?? null,
+    limit_price: t.limitPrice ?? null,
+    distal_price: t.distalPrice ?? null,
+    stop_loss_price: t.stopLossPrice ?? null,
+    cash_out_price: t.cashOutPrice ?? null,
+    placed_date: t.placedDate ?? null,
+    placed_at: t.placedAt ?? null,
   }
 }
 

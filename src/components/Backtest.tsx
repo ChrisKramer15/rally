@@ -9,6 +9,8 @@ import {
 import { computePortfolioSummary } from '../data/tradeMath'
 import { formatEasternDateTime } from '../data/marketCalendar'
 import { TradeDetailModal } from './TradeDetailModal'
+import { TradeDetails } from './TradeDetails'
+import { positionToDetail, closedToDetail, formatDetailRR } from '../data/tradeDetailData'
 
 /** The placement moment in ET (falls back to the plain date for legacy rows). */
 function placedLabel(position: BacktestPosition): string {
@@ -101,6 +103,7 @@ function OpenPositionRow({
   onClose: (id: string, exitPrice?: number) => void
   onSelect: (position: BacktestPosition) => void
 }) {
+  const [expanded, setExpanded] = useState(false)
   const isShort = position.side === 'short'
   const entryPrice = position.entryPrice ?? 0
   const livePrice = currentPriceFor(position.symbol, stocks)
@@ -119,68 +122,79 @@ function OpenPositionRow({
   const hitTarget = livePrice !== null && (isShort ? livePrice <= position.cashOutPrice : livePrice >= position.cashOutPrice)
 
   return (
-    <li
-      className="bt-row bt-row-clickable"
-      onClick={() => onSelect(position)}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(position) } }}
-      title={`View ${position.symbol} chart with trade levels`}
-    >
-      <div className="bt-col-date">{position.openedDate ?? '—'}</div>
+    <li className="bt-row-wrap">
+      <div
+        className="bt-row bt-row-clickable"
+        onClick={() => onSelect(position)}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(position) } }}
+        title={`View ${position.symbol} chart with trade levels`}
+      >
+        <div className="bt-col-date">{position.openedDate ?? '—'}</div>
 
-      <div className="bt-col-sym">
-        <span className="bt-sym">
-          {position.symbol}
-          <span className={`bt-side-badge ${isShort ? 'bt-side-short' : 'bt-side-long'}`}>
-            {isShort ? 'SHORT' : 'LONG'}
+        <div className="bt-col-sym">
+          <span className="bt-sym">
+            {position.symbol}
+            <span className={`bt-side-badge ${isShort ? 'bt-side-short' : 'bt-side-long'}`}>
+              {isShort ? 'SHORT' : 'LONG'}
+            </span>
           </span>
-        </span>
-        {position.name && position.name !== position.symbol && (
-          <span className="bt-name">{position.name}</span>
-        )}
-        <span className="bt-shares">{position.shares} sh · {position.orderType} · {formatRR(position)}</span>
-        <SignalBadges
-          zoneKind={position.zoneKind}
-          zoneGrade={position.zoneGrade}
-          signalStrength={position.signalStrength}
-        />
-      </div>
+          {position.name && position.name !== position.symbol && (
+            <span className="bt-name">{position.name}</span>
+          )}
+          <span className="bt-shares">{position.shares} sh · {position.orderType} · {formatRR(position)}</span>
+          <SignalBadges
+            zoneKind={position.zoneKind}
+            zoneGrade={position.zoneGrade}
+            signalStrength={position.signalStrength}
+          />
+        </div>
 
-      <div className="bt-col-num" data-label="Trade cost">
-        <span className="bt-cost">${formatCurrency(tradeCost)}</span>
-        <span className="bt-sub">@ ${formatCurrency(entryPrice)}</span>
-      </div>
+        <div className="bt-col-num" data-label="Trade cost">
+          <span className="bt-cost">${formatCurrency(tradeCost)}</span>
+          <span className="bt-sub">@ ${formatCurrency(entryPrice)}</span>
+        </div>
 
-      <div className="bt-col-num" data-label="Current cost">
-        <span className={`bt-cost ${up ? 'up' : 'down'}`}>${formatCurrency(currentCost)}</span>
-        <span className={`bt-sub ${up ? 'up' : 'down'}`}>
-          {up ? '+' : ''}{pnlPct.toFixed(2)}%
-        </span>
-      </div>
+        <div className="bt-col-num" data-label="Current cost">
+          <span className={`bt-cost ${up ? 'up' : 'down'}`}>${formatCurrency(currentCost)}</span>
+          <span className={`bt-sub ${up ? 'up' : 'down'}`}>
+            {up ? '+' : ''}{pnlPct.toFixed(2)}%
+          </span>
+        </div>
 
-      <div className="bt-col-num" data-label="Stop-loss">
-        <span className={`bt-stop ${hitStop ? 'bt-hit' : ''}`}>
-          ${formatCurrency(position.stopLossPrice)}
-        </span>
-      </div>
+        <div className="bt-col-num" data-label="Stop-loss">
+          <span className={`bt-stop ${hitStop ? 'bt-hit' : ''}`}>
+            ${formatCurrency(position.stopLossPrice)}
+          </span>
+        </div>
 
-      <div className="bt-col-num" data-label="Cash-out">
-        <span className={`bt-target ${hitTarget ? 'bt-hit' : ''}`}>
-          ${formatCurrency(position.cashOutPrice)}
-        </span>
-      </div>
+        <div className="bt-col-num" data-label="Cash-out">
+          <span className={`bt-target ${hitTarget ? 'bt-hit' : ''}`}>
+            ${formatCurrency(position.cashOutPrice)}
+          </span>
+        </div>
 
-      <div className="bt-col-action">
-        <button
-          className="bt-close-btn"
-          onClick={(e) => { e.stopPropagation(); onClose(position.id, markPrice) }}
-          aria-label={`Close ${position.symbol} position`}
-          title="Close position at market — banks realized P/L"
-        >
-          ×
-        </button>
+        <div className="bt-col-action">
+          <button
+            className="bt-details-btn"
+            onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v) }}
+            aria-expanded={expanded}
+            title="Show trade details"
+          >
+            {expanded ? 'Hide' : 'Details'}
+          </button>
+          <button
+            className="bt-close-btn"
+            onClick={(e) => { e.stopPropagation(); onClose(position.id, markPrice) }}
+            aria-label={`Close ${position.symbol} position`}
+            title="Close position at market — banks realized P/L"
+          >
+            ×
+          </button>
+        </div>
       </div>
+      {expanded && <TradeDetails data={positionToDetail(position)} />}
     </li>
   )
 }
@@ -196,6 +210,7 @@ function PendingOrderRow({
   onCancel: (id: string) => void
   onSelect: (position: BacktestPosition) => void
 }) {
+  const [expanded, setExpanded] = useState(false)
   const isShort = position.side === 'short'
   const limit = position.limitPrice ?? 0
   const livePrice = currentPriceFor(position.symbol, stocks)
@@ -205,108 +220,134 @@ function PendingOrderRow({
   const dir = isShort ? 'rises to' : 'drops to'
 
   return (
-    <li
-      className="bt-row bt-row-pending bt-row-clickable"
-      onClick={() => onSelect(position)}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(position) } }}
-      title={`View ${position.symbol} chart with trade levels`}
-    >
-      <div className="bt-col-date" title={`Placed ${placedLabel(position)}`}>
-        {position.placedDate}
-        <span className="bt-placed-time">{placedLabel(position)}</span>
-      </div>
+    <li className="bt-row-wrap">
+      <div
+        className="bt-row bt-row-pending bt-row-clickable"
+        onClick={() => onSelect(position)}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(position) } }}
+        title={`View ${position.symbol} chart with trade levels`}
+      >
+        <div className="bt-col-date" title={`Placed ${placedLabel(position)}`}>
+          {position.placedDate}
+          <span className="bt-placed-time">{placedLabel(position)}</span>
+        </div>
 
-      <div className="bt-col-sym">
-        <span className="bt-sym">
-          {position.symbol}
-          <span className={`bt-side-badge ${isShort ? 'bt-side-short' : 'bt-side-long'}`}>
-            {isShort ? 'SHORT' : 'LONG'}
+        <div className="bt-col-sym">
+          <span className="bt-sym">
+            {position.symbol}
+            <span className={`bt-side-badge ${isShort ? 'bt-side-short' : 'bt-side-long'}`}>
+              {isShort ? 'SHORT' : 'LONG'}
+            </span>
           </span>
-        </span>
-        {position.name && position.name !== position.symbol && (
-          <span className="bt-name">{position.name}</span>
-        )}
-        <span className="bt-shares">{position.shares} sh · limit · {formatRR(position)}</span>
-        <SignalBadges
-          zoneKind={position.zoneKind}
-          zoneGrade={position.zoneGrade}
-          signalStrength={position.signalStrength}
-        />
-      </div>
+          {position.name && position.name !== position.symbol && (
+            <span className="bt-name">{position.name}</span>
+          )}
+          <span className="bt-shares">{position.shares} sh · limit · {formatRR(position)}</span>
+          <SignalBadges
+            zoneKind={position.zoneKind}
+            zoneGrade={position.zoneGrade}
+            signalStrength={position.signalStrength}
+          />
+        </div>
 
-      <div className="bt-col-num" data-label="Reserved">
-        <span className="bt-cost">${formatCurrency(reserved)}</span>
-        <span className="bt-sub">@ ${formatCurrency(limit)}</span>
-      </div>
+        <div className="bt-col-num" data-label="Reserved">
+          <span className="bt-cost">${formatCurrency(reserved)}</span>
+          <span className="bt-sub">@ ${formatCurrency(limit)}</span>
+        </div>
 
-      <div className="bt-col-num bt-col-wide" data-label="Trigger">
-        <span className="bt-pending-tag">Pending</span>
-        <span className="bt-sub">
-          fills when {dir} ${formatCurrency(limit)}
-          {distancePct !== null && ` (${distancePct >= 0 ? '+' : ''}${distancePct.toFixed(1)}% away)`}
-        </span>
-      </div>
+        <div className="bt-col-num bt-col-wide" data-label="Trigger">
+          <span className="bt-pending-tag">Pending</span>
+          <span className="bt-sub">
+            fills when {dir} ${formatCurrency(limit)}
+            {distancePct !== null && ` (${distancePct >= 0 ? '+' : ''}${distancePct.toFixed(1)}% away)`}
+          </span>
+        </div>
 
-      <div className="bt-col-num" data-label="Stop-loss">
-        <span className="bt-stop">${formatCurrency(position.stopLossPrice)}</span>
-      </div>
+        <div className="bt-col-num" data-label="Stop-loss">
+          <span className="bt-stop">${formatCurrency(position.stopLossPrice)}</span>
+        </div>
 
-      <div className="bt-col-num" data-label="Cash-out">
-        <span className="bt-target">${formatCurrency(position.cashOutPrice)}</span>
-      </div>
+        <div className="bt-col-num" data-label="Cash-out">
+          <span className="bt-target">${formatCurrency(position.cashOutPrice)}</span>
+        </div>
 
-      <div className="bt-col-action">
-        <button
-          className="bt-close-btn"
-          onClick={(e) => { e.stopPropagation(); onCancel(position.id) }}
-          aria-label={`Cancel ${position.symbol} pending order`}
-          title="Cancel pending order"
-        >
-          ×
-        </button>
+        <div className="bt-col-action">
+          <button
+            className="bt-details-btn"
+            onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v) }}
+            aria-expanded={expanded}
+            title="Show trade details"
+          >
+            {expanded ? 'Hide' : 'Details'}
+          </button>
+          <button
+            className="bt-close-btn"
+            onClick={(e) => { e.stopPropagation(); onCancel(position.id) }}
+            aria-label={`Cancel ${position.symbol} pending order`}
+            title="Cancel pending order"
+          >
+            ×
+          </button>
+        </div>
       </div>
+      {expanded && <TradeDetails data={positionToDetail(position)} />}
     </li>
   )
 }
 
 /** A single banked closed-trade row (reused flat and inside grouped sections). */
 function ClosedTradeRow({ trade }: { trade: ClosedTrade }) {
+  const [expanded, setExpanded] = useState(false)
+  const detail = closedToDetail(trade)
   const up = trade.realizedPnl >= 0
   const cost = trade.entryPrice * trade.shares
   const pct = cost > 0 ? (trade.realizedPnl / cost) * 100 : 0
   return (
-    <li className="bt-closed-row">
-      <div className="bt-col-date">{trade.closedDate}</div>
-      <div className="bt-col-sym">
-        <span className="bt-sym">
-          {trade.symbol}
-          <span className={`bt-side-badge ${trade.side === 'short' ? 'bt-side-short' : 'bt-side-long'}`}>
-            {trade.side === 'short' ? 'SHORT' : 'LONG'}
+    <li className="bt-row-wrap">
+      <div className="bt-closed-row">
+        <div className="bt-col-date">{trade.closedDate}</div>
+        <div className="bt-col-sym">
+          <span className="bt-sym">
+            {trade.symbol}
+            <span className={`bt-side-badge ${trade.side === 'short' ? 'bt-side-short' : 'bt-side-long'}`}>
+              {trade.side === 'short' ? 'SHORT' : 'LONG'}
+            </span>
           </span>
-        </span>
-        <span className="bt-shares">{trade.shares} sh</span>
-        <SignalBadges
-          zoneKind={trade.zoneKind}
-          zoneGrade={trade.zoneGrade}
-          signalStrength={trade.signalStrength}
-        />
+          <span className="bt-shares">{trade.shares} sh · {formatDetailRR(detail)}</span>
+          <SignalBadges
+            zoneKind={trade.zoneKind}
+            zoneGrade={trade.zoneGrade}
+            signalStrength={trade.signalStrength}
+          />
+        </div>
+        <div className="bt-col-num" data-label="Entry">
+          <span className="bt-sub">${formatCurrency(trade.entryPrice)}</span>
+        </div>
+        <div className="bt-col-num" data-label="Exit">
+          <span className="bt-sub">${formatCurrency(trade.exitPrice)}</span>
+        </div>
+        <div className="bt-col-num" data-label="Realized">
+          <span className={`bt-cost ${up ? 'up' : 'down'}`}>
+            {up ? '+' : ''}${formatCurrency(trade.realizedPnl)}
+          </span>
+          <span className={`bt-sub ${up ? 'up' : 'down'}`}>
+            {up ? '+' : ''}{pct.toFixed(2)}%
+          </span>
+        </div>
+        <div className="bt-col-action">
+          <button
+            className="bt-details-btn"
+            onClick={() => setExpanded((v) => !v)}
+            aria-expanded={expanded}
+            title="Show trade details"
+          >
+            {expanded ? 'Hide' : 'Details'}
+          </button>
+        </div>
       </div>
-      <div className="bt-col-num" data-label="Entry">
-        <span className="bt-sub">${formatCurrency(trade.entryPrice)}</span>
-      </div>
-      <div className="bt-col-num" data-label="Exit">
-        <span className="bt-sub">${formatCurrency(trade.exitPrice)}</span>
-      </div>
-      <div className="bt-col-num" data-label="Realized">
-        <span className={`bt-cost ${up ? 'up' : 'down'}`}>
-          {up ? '+' : ''}${formatCurrency(trade.realizedPnl)}
-        </span>
-        <span className={`bt-sub ${up ? 'up' : 'down'}`}>
-          {up ? '+' : ''}{pct.toFixed(2)}%
-        </span>
-      </div>
+      {expanded && <TradeDetails data={detail} />}
     </li>
   )
 }
@@ -648,6 +689,7 @@ export function Backtest({ stocks, portfolio }: BacktestProps) {
                 <div className="bt-col-num">Entry</div>
                 <div className="bt-col-num">Exit</div>
                 <div className="bt-col-num">Realized</div>
+                <div className="bt-col-action"></div>
               </div>
 
               {closedGroupBy === 'none' ? (

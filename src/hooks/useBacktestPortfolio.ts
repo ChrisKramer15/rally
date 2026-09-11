@@ -194,6 +194,27 @@ export interface ClosedTrade {
   proximalPrice?: number
   /** The zone's explosive move-away date (YYYY-MM-DD). */
   signalDate?: string
+  /**
+   * ── Trade-level detail (carried from the position at close) ──────────────
+   * These let the Backtest "Details" panel show the full lifecycle for a closed
+   * trade — the levels it was managed against and its placement timeline — the
+   * same way it does for an open/pending position. All nullable for trades
+   * banked before this was tracked.
+   */
+  /** How the order was placed ('market' | 'limit'). */
+  orderType?: OrderType
+  /** The resting limit (proximal) price at placement, for limit orders. */
+  limitPrice?: number
+  /** The zone's distal line captured at order time (anchors the stop). */
+  distalPrice?: number
+  /** The managed stop-loss level the trade was exited against. */
+  stopLossPrice?: number
+  /** The managed cash-out (target) level the trade was exited against. */
+  cashOutPrice?: number
+  /** ISO date (ET) the order was placed. */
+  placedDate?: string
+  /** Moment-in-time anchor (UTC ISO) — placement instant, displayed in ET. */
+  placedAt?: string
 }
 
 interface PersistShape {
@@ -259,6 +280,26 @@ function makeId(): string {
 // UTC date would roll to "tomorrow" for any trade placed after ~8pm ET.
 function todayISO(): string {
   return todayEasternISO()
+}
+
+/**
+ * The trade-level detail fields carried from a live position onto its banked
+ * ClosedTrade, so the Backtest "Details" panel can show a closed trade's full
+ * lifecycle (levels + placement timeline) the same as an open/pending one.
+ */
+function carriedDetail(p: BacktestPosition): Pick<
+  ClosedTrade,
+  'orderType' | 'limitPrice' | 'distalPrice' | 'stopLossPrice' | 'cashOutPrice' | 'placedDate' | 'placedAt'
+> {
+  return {
+    orderType: p.orderType,
+    limitPrice: p.limitPrice,
+    distalPrice: p.distalPrice,
+    stopLossPrice: p.stopLossPrice,
+    cashOutPrice: p.cashOutPrice,
+    placedDate: p.placedDate,
+    placedAt: p.placedAt,
+  }
 }
 
 /**
@@ -673,6 +714,7 @@ export function useBacktestPortfolio() {
           signalStrength: p.signalStrength,
           proximalPrice: p.proximalPrice,
           signalDate: p.signalDate,
+          ...carriedDetail(p),
         })
       }
 
@@ -737,6 +779,7 @@ export function useBacktestPortfolio() {
         signalStrength: pos.signalStrength,
         proximalPrice: pos.proximalPrice,
         signalDate: pos.signalDate,
+        ...carriedDetail(pos),
       }
       // Realized P/L compounds into the cash base (true-portfolio behavior):
       // a banked gain grows what you can deploy next, a loss shrinks it.

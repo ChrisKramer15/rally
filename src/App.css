@@ -2444,7 +2444,7 @@
 /* 7 cols: date | ticker | trade cost | current cost | stop | cash-out | action */
 .bt-row {
   display: grid;
-  grid-template-columns: 1.1fr 1.6fr 1.2fr 1.2fr 1fr 1fr 40px;
+  grid-template-columns: 1.1fr 1.6fr 1.2fr 1.2fr 1fr 1fr 96px;
   align-items: center;
   gap: 12px;
   padding: 12px 8px;
@@ -2566,6 +2566,101 @@
 }
 .bt-close-btn:hover {
   color: var(--neon-red);
+}
+
+/* ── Row wrapper + expandable details ────────────────────────────────────── */
+.bt-row-wrap {
+  display: block;
+  border-bottom: 1px solid rgba(120, 90, 255, 0.08);
+}
+/* The wrap owns the divider now; the inner grid rows drop theirs. */
+.bt-row-wrap > .bt-row,
+.bt-row-wrap > .bt-closed-row {
+  border-bottom: none;
+}
+
+.bt-col-action {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.bt-details-btn {
+  font-family: var(--sans);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+  background: rgba(120, 90, 255, 0.08);
+  border: 1px solid rgba(120, 90, 255, 0.2);
+  border-radius: 5px;
+  padding: 4px 7px;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+  white-space: nowrap;
+}
+.bt-details-btn:hover {
+  color: var(--neon-cyan);
+  border-color: var(--neon-cyan);
+  background: rgba(0, 229, 255, 0.08);
+}
+
+/* ── Inline trade-details drawer ─────────────────────────────────────────── */
+.td-inline {
+  padding: 14px 12px 18px;
+  background: rgba(120, 90, 255, 0.04);
+  border-top: 1px dashed rgba(120, 90, 255, 0.18);
+}
+
+.td-facts {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px 16px;
+  margin: 0 0 14px;
+}
+
+.td-fact {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.td-fact-label {
+  font-family: var(--sans);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+}
+.td-fact-val {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text);
+}
+.td-fact-hi .td-fact-val {
+  color: var(--neon-cyan);
+  font-weight: 700;
+}
+
+.td-inline-chart {
+  position: relative;
+  width: 100%;
+  min-height: 120px;
+}
+.td-inline-chart-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  width: 100%;
+}
+
+@media (max-width: 760px) {
+  .td-facts {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 
 /* ── Empty state ── */
@@ -2858,7 +2953,7 @@
 /* Closed trades: date | ticker | entry | exit | realized (5 cols) */
 .bt-closed-row {
   display: grid;
-  grid-template-columns: 1.1fr 1.6fr 1fr 1fr 1.2fr;
+  grid-template-columns: 1.1fr 1.6fr 1fr 1fr 1.2fr 72px;
   align-items: center;
   gap: 12px;
   padding: 10px 20px;
@@ -2870,9 +2965,9 @@
   .bt-closed-row {
     grid-template-columns: repeat(3, 1fr);
     grid-template-areas:
-      'date  date  date'
-      'sym   sym   sym'
-      'entry exit  realized';
+      'date   date   action'
+      'sym    sym    sym'
+      'entry  exit   realized';
     gap: 10px 12px;
     padding: 14px 10px;
   }
@@ -2881,6 +2976,7 @@
   .bt-closed-row > :nth-child(3) { grid-area: entry; }
   .bt-closed-row > :nth-child(4) { grid-area: exit; }
   .bt-closed-row > :nth-child(5) { grid-area: realized; }
+  .bt-closed-row > :nth-child(6) { grid-area: action; justify-self: end; }
   .bt-closed-row > .bt-col-num {
     align-items: flex-start;
     text-align: left;
