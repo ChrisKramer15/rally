@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { changePct } from './data/stocks'
 import { loadCached } from './data/dailyCache'
+import { formatEasternTime } from './data/marketCalendar'
+import type { DailyBar } from './data/tiingo'
 import { detectBasesForBars, type ZoneGrade, type ZoneKind } from './hooks/useBasingZones'
 import { gradeExplosiveAt, type ExplosiveGrade } from './hooks/useExplosiveMoves'
 import { useIndexMarket } from './hooks/useIndexMarket'
@@ -153,22 +155,19 @@ function App() {
   useEffect(() => {
     if (orderSymbols.length === 0) return
     const cached = loadCached(orderSymbols)
-    const rangeBySymbol = new Map<string, { low: number; high: number }>()
+    // Pass each symbol's FULL cached bar history (ascending by date). fillPending
+    // and settleOpen walk forward from each order's moment-in-time anchor, so a
+    // resting limit fills only on a session AFTER it was placed, and its exit
+    // settles only on a session after the fill bar — no instant round-trips.
+    const barsBySymbol = new Map<string, DailyBar[]>()
     for (const sym of orderSymbols) {
       const bars = cached[sym]?.bars
-      const latest = bars && bars.length > 0 ? bars[bars.length - 1] : undefined
-      if (latest) {
-        rangeBySymbol.set(sym, { low: latest.low, high: latest.high })
-      } else {
-        // No cached bars — fall back to the live price as a zero-width range.
-        const live = stocks.find((s) => s.symbol === sym)?.price
-        if (live !== undefined) rangeBySymbol.set(sym, { low: live, high: live })
-      }
+      if (bars && bars.length > 0) barsBySymbol.set(sym, bars)
     }
-    // Fill entries first (a limit could fill and then hit its target same day),
-    // then settle any open positions' target/stop.
-    fillPending(rangeBySymbol)
-    settleOpen(rangeBySymbol)
+    // Fill entries first (a limit may fill on one session, then its target/stop
+    // can settle on a later one), then settle any open positions' target/stop.
+    fillPending(barsBySymbol)
+    settleOpen(barsBySymbol)
   }, [stocks, orderSymbols, fillPending, settleOpen])
 
   // Ticker tape is always sorted alphabetically, regardless of the watchlist's
@@ -176,7 +175,7 @@ function App() {
   const tickerStocks = [...stocks].sort((a, b) => a.symbol.localeCompare(b.symbol))
 
   const updatedLabel = lastUpdated
-    ? lastUpdated.toLocaleTimeString('en-US', { hour12: false })
+    ? `${formatEasternTime(lastUpdated)} ET`
     : '—'
 
   // Scroll the ticker at a constant visual speed regardless of how many symbols

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { formatCurrency } from '../data/stocks'
+import { formatEasternDateTime } from '../data/marketCalendar'
 import { DEFAULT_RISK_REWARD, type OrderType, type TradeSide } from '../hooks/useBacktestPortfolio'
 
 export interface TradeTicket {
@@ -12,6 +13,13 @@ export interface TradeTicket {
 
 const STOP_BUFFER_ATR = 0.1
 const FALLBACK_STOP_PCT = 0.08
+
+/**
+ * Default position sizing risks at most this fraction of the portfolio if the
+ * stop-loss is hit: shares are chosen so shares × |entry − stop| ≤ 1% × budget.
+ * Shares are whole numbers and rounded DOWN, so the risk never exceeds 1%.
+ */
+const RISK_PCT = 0.01
 
 interface TradeTicketModalProps {
   symbol: string
@@ -61,14 +69,21 @@ export function TradeTicketModal({
 
   // Seed the side from the signal's direction; the user can flip it.
   const [side, setSide] = useState<TradeSide>(defaultSide)
-  // Default sizing: ~10% of the budget, at least 1 share.
-  const defaultShares = Math.max(1, Math.floor((budget * 0.1) / (price || 1)))
-  const [sharesInput, setSharesInput] = useState<string>(String(defaultShares))
-  const [orderType, setOrderType] = useState<OrderType>('market')
+  // Default order type is a LIMIT (pending) order at the proximal line — the
+  // supply/demand method enters on a pullback to the zone, not at market.
+  const [orderType, setOrderType] = useState<OrderType>('limit')
 
   const hasProximal = proximal != null && Number.isFinite(proximal) && proximal > 0
   const defaultLimit = hasProximal ? (proximal as number) : price
   const [limitInput, setLimitInput] = useState<string>(defaultLimit.toFixed(2))
+
+  // Once the user types a share count we stop auto-sizing so we don't stomp it.
+  // While null, the field displays the risk-based default computed below.
+  const [sharesInput, setSharesInput] = useState<string | null>(null)
+
+  // Timestamp when this ticket was opened — the trade's date/time, shown in ET.
+  // Captured once at mount as state so it's stable across re-renders.
+  const [openedAt] = useState(() => new Date())
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -76,10 +91,8 @@ export function TradeTicketModal({
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  const shares = Math.max(0, Math.floor(Number(sharesInput) || 0))
   const limitPrice = Number(limitInput) || 0
   const entry = orderType === 'limit' ? limitPrice : price
-  const estCost = shares * entry
 
   // Preview the stop + target the position will get, mirroring managedLevels in
   // the portfolio hook so the ticket shows what you're committing to. The
@@ -114,6 +127,31 @@ export function TradeTicketModal({
     const ratio = risk > 0 ? reward / risk : null
     return { stop, target, ratio, usedDistal: distalNum !== undefined && distalNum > entry, usedSwing }
   }, [side, entry, distal, atr, swingTarget])
+
+  // Risk-based default sizing: pick the largest whole share count whose total
+  // loss at the stop stays within RISK_PCT of the budget. Rounded DOWN so the
+  // stop-loss cost never crosses 1%. Falls back to null when we can't size
+  // (no valid entry/stop or zero risk per share).
+  const riskSizedShares = useMemo(() => {
+    if (!preview || !(entry > 0) || !(budget > 0)) return null
+    const riskPerShare = Math.abs(entry - preview.stop)
+    if (!(riskPerShare > 0)) return null
+    const maxLoss = budget * RISK_PCT
+    const n = Math.floor(maxLoss / riskPerShare)
+    return n >= 1 ? n : null
+  }, [preview, entry, budget])
+
+  // The value shown in the shares box: the user's typed value once they've
+  // edited it, otherwise the live risk-based default (recomputed as side / order
+  // type / limit price change). No effect needed — this derives during render.
+  const sharesValue = sharesInput ?? (riskSizedShares != null ? String(riskSizedShares) : '')
+
+  const shares = Math.max(0, Math.floor(Number(sharesValue) || 0))
+  const estCost = shares * entry
+
+  // The dollar loss if the stop is hit at the current share count — shown so the
+  // user can see the 1% sizing and confirm a manual override stays in budget.
+  const riskAmount = preview ? shares * Math.abs(entry - preview.stop) : null
 
   const canSubmit =
     shares >= 1 &&
@@ -159,6 +197,11 @@ export function TradeTicketModal({
         <div className="tt-price-row">
           <span className="tt-price-label">Last price</span>
           <span className="tt-price-val">${formatCurrency(price)}</span>
+        </div>
+
+        <div className="tt-price-row">
+          <span className="tt-price-label">Order time</span>
+          <span className="tt-price-val tt-order-time">{formatEasternDateTime(openedAt)}</span>
         </div>
 
         {/* ── Side ── */}
@@ -216,7 +259,7 @@ export function TradeTicketModal({
             type="number"
             min={1}
             step={1}
-            value={sharesInput}
+            value={sharesValue}
             onChange={(e) => setSharesInput(e.target.value)}
             aria-label="Share quantity"
           />
@@ -255,6 +298,15 @@ export function TradeTicketModal({
                 {preview.usedDistal ? 'beyond distal line' : `${(FALLBACK_STOP_PCT * 100).toFixed(0)}% (no zone)`}
               </span>
             </div>
+            {riskAmount != null && (
+              <div className="tt-level">
+                <span className="tt-level-label">Risk at stop</span>
+                <span className="tt-level-val tt-level-risk">${formatCurrency(riskAmount)}</span>
+                <span className="tt-level-note">
+                  {budget > 0 ? `${((riskAmount / budget) * 100).toFixed(2)}% of budget` : 'sized to 1%'}
+                </span>
+              </div>
+            )}
             <div className="tt-level">
               <span className="tt-level-label">Cash-out</span>
               <span className="tt-level-val tt-level-target">${formatCurrency(preview.target)}</span>

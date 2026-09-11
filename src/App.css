@@ -2469,6 +2469,14 @@
   color: var(--muted);
 }
 
+.bt-placed-time {
+  display: block;
+  font-size: 10px;
+  color: var(--muted);
+  opacity: 0.6;
+  margin-top: 2px;
+}
+
 .bt-col-sym {
   display: flex;
   flex-direction: column;

@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react'
 import { usePipelineRuns } from '../hooks/usePipelineRuns'
+import { formatEasternDateTime } from '../data/marketCalendar'
 import type { PipelineRun, PipelineStage, PipelineStatus, StageStatus } from '../data/pipelineStore'
 
-/** Human-readable relative + absolute timestamp. */
+/** Human-readable relative + absolute timestamp (absolute part in Eastern time). */
 function formatWhen(iso: string): string {
   const d = new Date(iso)
   const diffMs = Date.now() - d.getTime()
@@ -12,7 +13,7 @@ function formatWhen(iso: string): string {
   else if (mins < 60) rel = `${mins}m ago`
   else if (mins < 1440) rel = `${Math.round(mins / 60)}h ago`
   else rel = `${Math.round(mins / 1440)}d ago`
-  return `${rel} · ${d.toLocaleString('en-US', { hour12: false })}`
+  return `${rel} · ${formatEasternDateTime(d)}`
 }
 
 function formatDuration(ms: number): string {

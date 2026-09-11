@@ -28,6 +28,7 @@ interface TradeRow {
   status: 'pending' | 'open'
   order_type: 'market' | 'limit'
   placed_date: string
+  placed_at: string | null
   opened_date: string | null
   entry_price: number | string | null
   limit_price: number | string | null
@@ -81,6 +82,7 @@ function rowToPosition(r: TradeRow): BacktestPosition {
     status: r.status,
     orderType: r.order_type,
     placedDate: r.placed_date,
+    placedAt: r.placed_at ?? undefined,
     openedDate: r.opened_date,
     entryPrice: num(r.entry_price) ?? null,
     limitPrice: num(r.limit_price),
@@ -130,6 +132,7 @@ function positionToRow(p: BacktestPosition): TradeRow {
     status: p.status,
     order_type: p.orderType,
     placed_date: p.placedDate,
+    placed_at: p.placedAt ?? null,
     opened_date: p.openedDate,
     entry_price: p.entryPrice,
     limit_price: p.limitPrice ?? null,

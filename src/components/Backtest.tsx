@@ -7,7 +7,17 @@ import {
   type useBacktestPortfolio,
 } from '../hooks/useBacktestPortfolio'
 import { computePortfolioSummary } from '../data/tradeMath'
+import { formatEasternDateTime } from '../data/marketCalendar'
 import { TradeDetailModal } from './TradeDetailModal'
+
+/** The placement moment in ET (falls back to the plain date for legacy rows). */
+function placedLabel(position: BacktestPosition): string {
+  if (position.placedAt) {
+    const d = new Date(position.placedAt)
+    if (!Number.isNaN(d.getTime())) return formatEasternDateTime(d)
+  }
+  return position.placedDate
+}
 
 type Portfolio = ReturnType<typeof useBacktestPortfolio>
 
@@ -203,7 +213,10 @@ function PendingOrderRow({
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(position) } }}
       title={`View ${position.symbol} chart with trade levels`}
     >
-      <div className="bt-col-date">{position.placedDate}</div>
+      <div className="bt-col-date" title={`Placed ${placedLabel(position)}`}>
+        {position.placedDate}
+        <span className="bt-placed-time">{placedLabel(position)}</span>
+      </div>
 
       <div className="bt-col-sym">
         <span className="bt-sym">

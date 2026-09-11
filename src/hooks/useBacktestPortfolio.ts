@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ZoneGrade, ZoneKind } from './useBasingZones'
 import type { ExplosiveGrade } from './useExplosiveMoves'
+import { todayEasternISO } from '../data/marketCalendar'
+import type { DailyBar } from '../data/tiingo'
 import {
   deleteTrade as deleteTradeRemote,
   deleteTrades as deleteTradesRemote,
@@ -83,8 +85,16 @@ export interface BacktestPosition {
   status: PositionStatus
   /** How the order was placed. */
   orderType: OrderType
-  /** ISO date (YYYY-MM-DD) the order was placed. */
+  /** ISO date (YYYY-MM-DD, ET) the order was placed. */
   placedDate: string
+  /**
+   * Moment-in-time anchor: the exact instant the order was placed, as a UTC ISO
+   * timestamp (displayed in ET). This is the "line in the sand" that prevents a
+   * limit from instantly activating — a resting order can only fill on a session
+   * STRICTLY AFTER this instant's ET calendar date, never on an already-complete
+   * bar. Optional for backward compatibility with pre-existing saved rows.
+   */
+  placedAt?: string
   /** ISO date the position was filled/opened. Null while pending. */
   openedDate: string | null
   /** Fill price per share. Null while pending (not yet filled). */
@@ -245,8 +255,41 @@ function makeId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
+// The trade's calendar date as the user sees it — EASTERN time, not UTC. A
+// UTC date would roll to "tomorrow" for any trade placed after ~8pm ET.
 function todayISO(): string {
-  return new Date().toISOString().slice(0, 10)
+  return todayEasternISO()
+}
+
+/**
+ * The placement-session floor for a position: the ET calendar date (YYYY-MM-DD)
+ * of its moment-in-time anchor. A resting limit may only fill on a bar whose
+ * session date is STRICTLY GREATER than this. Falls back to placedDate for
+ * legacy rows that predate the placedAt anchor.
+ */
+function placementFloor(p: BacktestPosition): string {
+  if (p.placedAt) {
+    const t = new Date(p.placedAt)
+    if (!Number.isNaN(t.getTime())) return todayEasternISO(t)
+  }
+  return p.placedDate
+}
+
+/**
+ * The first bar in `bars` whose session date is strictly after `afterDate`
+ * (YYYY-MM-DD) and that satisfies `hit`. Bars are assumed ascending by date
+ * (as the daily cache stores them). Returns the matching bar or undefined.
+ */
+function firstBarAfter(
+  bars: DailyBar[],
+  afterDate: string,
+  hit: (bar: DailyBar) => boolean,
+): DailyBar | undefined {
+  for (const bar of bars) {
+    if (bar.date <= afterDate) continue // strictly-after: skip same-session + older
+    if (hit(bar)) return bar
+  }
+  return undefined
 }
 
 /**
@@ -400,6 +443,10 @@ export function useBacktestPortfolio() {
       const shares = Math.max(1, Math.floor(input.shares))
       const riskReward = input.riskReward ?? DEFAULT_RISK_REWARD
       const today = todayISO()
+      // Moment-in-time anchor: the exact submit instant (UTC). For a limit order
+      // this is the "line in the sand" that keeps it from filling on the bar it
+      // was placed on — fills are only eligible on sessions strictly after this.
+      const placedAt = new Date().toISOString()
 
       if (input.orderType === 'limit') {
         const limitPrice = input.limitPrice
@@ -418,6 +465,7 @@ export function useBacktestPortfolio() {
           status: 'pending',
           orderType: 'limit',
           placedDate: today,
+          placedAt,
           openedDate: null,
           entryPrice: null,
           limitPrice: limitPrice as number,
@@ -455,6 +503,7 @@ export function useBacktestPortfolio() {
         status: 'open',
         orderType: 'market',
         placedDate: today,
+        placedAt,
         openedDate: today,
         entryPrice: price,
         distalPrice: input.distal,
@@ -480,33 +529,41 @@ export function useBacktestPortfolio() {
   }, [])
 
   /**
-   * Fill any pending limit orders whose trigger price has been reached, using a
-   * map of symbol → the latest daily bar's low/high range. The fill tests the
-   * intraday extreme (not just the close), so an order fills the moment price
-   * *traded through* the limit during the session:
-   *   • long  — fills when the day's LOW ≤ limit (price dipped to the line)
-   *   • short — fills when the day's HIGH ≥ limit (price rose to the line)
+   * Fill any pending limit orders whose trigger price has been reached — but
+   * only on a session STRICTLY AFTER the order's moment-in-time anchor. Given a
+   * map of symbol → the symbol's cached daily bars (ascending by date), the fill
+   * walks forward from the placement session and takes the FIRST later bar that
+   * traded through the limit (an intraday touch, not just the close):
+   *   • long  — fills when a later day's LOW ≤ limit (price dipped to the line)
+   *   • short — fills when a later day's HIGH ≥ limit (price rose to the line)
+   * This is what stops the instant buy+sell: the bar the order was placed on
+   * (already complete) is never eligible, so a limit rests until real forward
+   * price reaches it. The fill records that later bar's date as openedDate, so
+   * settleOpen can in turn only exit on a bar after the fill.
+   *
    * Filled orders flip to 'open' at the limit price with freshly derived
    * stop-loss / cash-out levels (anchored to the stored distal line + ATR).
    *
-   * Called by the app as live data updates. It's a no-op (returns the same
-   * state reference) when nothing fills, so it won't cause needless re-renders.
+   * No-op (same state reference) when nothing fills, so it won't churn renders.
    */
-  const fillPending = useCallback((rangeBySymbol: Map<string, { low: number; high: number }>) => {
+  const fillPending = useCallback((barsBySymbol: Map<string, DailyBar[]>) => {
     // Positions that flipped pending -> open this call, to upsert to Supabase.
     const filled: BacktestPosition[] = []
     setState((s) => {
       let changed = false
       const next = s.positions.map((p) => {
         if (p.status !== 'pending' || p.limitPrice === undefined) return p
-        const range = rangeBySymbol.get(p.symbol)
-        if (!range || !Number.isFinite(range.low) || !Number.isFinite(range.high)) return p
-        const triggered = p.side === 'short'
-          ? range.high >= p.limitPrice
-          : range.low <= p.limitPrice
-        if (!triggered) return p
+        const bars = barsBySymbol.get(p.symbol)
+        if (!bars || bars.length === 0) return p
+        const limit = p.limitPrice
+        // Only sessions strictly after the placement anchor are eligible.
+        const floor = placementFloor(p)
+        const fillBar = firstBarAfter(bars, floor, (bar) =>
+          p.side === 'short' ? bar.high >= limit : bar.low <= limit,
+        )
+        if (!fillBar) return p
         changed = true
-        const levels = managedLevels(p.side, p.limitPrice, {
+        const levels = managedLevels(p.side, limit, {
           distal: p.distalPrice,
           atr: p.atr,
           swingTarget: p.swingTarget,
@@ -515,8 +572,10 @@ export function useBacktestPortfolio() {
         const opened: BacktestPosition = {
           ...p,
           status: 'open' as const,
-          openedDate: todayISO(),
-          entryPrice: p.limitPrice,
+          // The fill happened on this later session, not "today" — record the
+          // bar's date so the exit can only settle on a bar after it.
+          openedDate: fillBar.date,
+          entryPrice: limit,
           ...levels,
         }
         filled.push(opened)
@@ -540,13 +599,19 @@ export function useBacktestPortfolio() {
    * stop price), not the current market price — mirroring an auto-set
    * limit/stop order. Realized P/L is banked and compounded into budget.
    *
-   * If both the target and the stop fall inside the same day's range we can't
+   * Exits only fire on a session STRICTLY AFTER the fill bar (openedDate) — an
+   * open position is never settled on the same bar it filled on, which is the
+   * other half of the instant buy+sell fix. Given a map of symbol → the cached
+   * daily bars (ascending), it walks forward from openedDate and takes the FIRST
+   * later bar that touched the stop or target.
+   *
+   * If both the target and the stop fall inside that same day's range we can't
    * know the intraday order from a daily bar, so we conservatively assume the
    * STOP hit first (worst case) — never book the optimistic outcome.
    *
    * No-op (same state reference) when nothing settles, so it won't churn.
    */
-  const settleOpen = useCallback((rangeBySymbol: Map<string, { low: number; high: number }>) => {
+  const settleOpen = useCallback((barsBySymbol: Map<string, DailyBar[]>) => {
     // Captured for the Supabase sync after setState: the banked trades to
     // insert, their now-removed position ids to delete, and the new budget.
     let bankedOut: ClosedTrade[] = []
@@ -561,21 +626,28 @@ export function useBacktestPortfolio() {
           remaining.push(p)
           continue
         }
-        const range = rangeBySymbol.get(p.symbol)
-        if (!range || !Number.isFinite(range.low) || !Number.isFinite(range.high)) {
+        const bars = barsBySymbol.get(p.symbol)
+        if (!bars || bars.length === 0 || !p.openedDate) {
           remaining.push(p)
           continue
         }
 
         const isShort = p.side === 'short'
-        const hitTarget = isShort ? range.low <= p.cashOutPrice : range.high >= p.cashOutPrice
-        const hitStop = isShort ? range.high >= p.stopLossPrice : range.low <= p.stopLossPrice
-
-        if (!hitTarget && !hitStop) {
+        const barHits = (bar: DailyBar) => {
+          const hitTarget = isShort ? bar.low <= p.cashOutPrice : bar.high >= p.cashOutPrice
+          const hitStop = isShort ? bar.high >= p.stopLossPrice : bar.low <= p.stopLossPrice
+          return hitTarget || hitStop
+        }
+        // Only bars strictly after the fill session can settle the position.
+        const exitBar = firstBarAfter(bars, p.openedDate, barHits)
+        if (!exitBar) {
           remaining.push(p)
           continue
         }
 
+        const hitStop = isShort
+          ? exitBar.high >= p.stopLossPrice
+          : exitBar.low <= p.stopLossPrice
         // Both in-range on a daily bar: assume the stop filled first (worst case).
         const exitPrice = hitStop ? p.stopLossPrice : p.cashOutPrice
         const entry = p.entryPrice
@@ -594,7 +666,8 @@ export function useBacktestPortfolio() {
           exitPrice,
           realizedPnl,
           openedDate: p.openedDate,
-          closedDate: todayISO(),
+          // The exit happened on this later session, not "today".
+          closedDate: exitBar.date,
           zoneKind: p.zoneKind,
           zoneGrade: p.zoneGrade,
           signalStrength: p.signalStrength,

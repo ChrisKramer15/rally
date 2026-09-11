@@ -153,3 +153,44 @@ export function currentMonthKey(now: Date = new Date()): string {
   const et = etPartsOf(now)
   return `${et.year}-${String(et.month).padStart(2, '0')}`
 }
+
+/**
+ * Today's calendar date (YYYY-MM-DD) in EASTERN time. Use this instead of
+ * `new Date().toISOString().slice(0,10)` for any date the user will SEE: the
+ * UTC version records tomorrow's date for anything after ~8pm ET, which would
+ * show/store the wrong trading day. Backend `updated_at` timestamps can stay
+ * UTC; anything displayed should use ET.
+ */
+export function todayEasternISO(now: Date = new Date()): TradingDay {
+  const et = etPartsOf(now)
+  return toIsoDay(et.year, et.month, et.day)
+}
+
+/** Format an instant as an Eastern-time time-of-day, e.g. "14:32" (24h). */
+export function formatEasternTime(d: Date): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: ET_TIME_ZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(d)
+}
+
+/**
+ * Format an instant as a full Eastern-time datetime with an "ET" suffix,
+ * e.g. "Sep 11, 2026, 14:32 ET". The single source of truth for displayed
+ * timestamps so every screen reads the same.
+ */
+export function formatEasternDateTime(d: Date): string {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: ET_TIME_ZONE,
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(d)
+  return `${parts} ET`
+}
