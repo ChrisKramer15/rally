@@ -29,6 +29,8 @@
 //   SUPABASE_SERVICE_ROLE_KEY   (auto-provided; bypasses RLS to write)
 
 import { createClient } from 'jsr:@supabase/supabase-js@2'
+import { effectiveCatchupDay } from './calendar.ts'
+import { isRetryableHttpStatus, nonRetryableError, retryableError, withRetry } from './retry.ts'
 
 // --- config ----------------------------------------------------------------
 
@@ -87,116 +89,54 @@ function isoDaysAgo(days: number): string {
   return d.toISOString().slice(0, 10)
 }
 
-/** Minute after the 16:00 ET close at which a session's daily bar is final. */
-const CLOSE_CUTOFF_MINUTES = 16 * 60 + 1 // 16:01 ET
-
-const ET_WEEKDAY_INDEX: Record<string, number> = {
-  Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6,
-}
-
-/** Break a Date into its America/New_York wall-clock parts. */
-function etParts(date: Date): {
-  year: number; month: number; day: number; hour: number; minute: number; weekday: number
-} {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', hour12: false, weekday: 'short',
-  }).formatToParts(date)
-  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? ''
-  const rawHour = Number(get('hour'))
-  return {
-    year: Number(get('year')),
-    month: Number(get('month')),
-    day: Number(get('day')),
-    hour: rawHour === 24 ? 0 : rawHour, // Intl can emit "24" at midnight
-    minute: Number(get('minute')),
-    weekday: ET_WEEKDAY_INDEX[get('weekday')] ?? 0,
-  }
-}
-
-function toIsoDay(year: number, month: number, day: number): string {
-  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-}
-
-/** Step an ISO day back one calendar day (UTC-noon anchor avoids DST edges). */
-function previousIsoDay(day: string): string {
-  const [y, m, d] = day.split('-').map(Number)
-  const anchor = new Date(Date.UTC(y, m - 1, d, 12, 0, 0))
-  anchor.setUTCDate(anchor.getUTCDate() - 1)
-  return toIsoDay(anchor.getUTCFullYear(), anchor.getUTCMonth() + 1, anchor.getUTCDate())
-}
-
-/** Walk back to the most recent Mon-Fri (returns input if already a weekday). */
-function lastWeekday(day: string): string {
-  let cursor = day
-  for (let i = 0; i < 7; i++) {
-    const [y, m, d] = cursor.split('-').map(Number)
-    const wd = new Date(Date.UTC(y, m - 1, d, 12, 0, 0)).getUTCDay()
-    if (wd !== 0 && wd !== 6) return cursor
-    cursor = previousIsoDay(cursor)
-  }
-  return cursor
-}
-
-/**
- * The most recent trading day whose daily bar should be considered FINAL as of
- * `now` (YYYY-MM-DD, ET). This is the date the freshest stored bar can possibly
- * carry, so the smart catch-up compares against THIS, not the raw calendar day
- * (a bar dated "today" doesn't exist until today's session closes + is pulled).
- *
- * Mirrors the client's marketCalendar.effectiveTradingDay:
- *   - weekday at/after 16:01 ET -> today
- *   - weekday before 16:01 ET   -> previous weekday
- *   - weekend                   -> previous weekday (Friday)
- * Holidays are intentionally not modeled (a missing bar just means no skip).
- */
-function effectiveTradingDay(now: Date = new Date()): string {
-  const et = etParts(now)
-  const today = toIsoDay(et.year, et.month, et.day)
-  if (et.weekday === 0 || et.weekday === 6) {
-    return lastWeekday(previousIsoDay(today))
-  }
-  const minutesSinceMidnight = et.hour * 60 + et.minute
-  if (minutesSinceMidnight >= CLOSE_CUTOFF_MINUTES) return today
-  return lastWeekday(previousIsoDay(today))
-}
-
 async function fetchTiingoBars(
   symbol: string,
   token: string,
   startDate: string,
 ): Promise<PriceRow[]> {
   const url = `${TIINGO_BASE}/${encodeURIComponent(symbol)}/prices?startDate=${startDate}&format=json`
-  const res = await fetch(url, {
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Token ${token}`,
-    },
+
+  // Retry only TRANSIENT failures (network error / 5xx incl. 504 Gateway
+  // Timeout). A 429 or other 4xx is classified non-retryable and fails fast so
+  // we never spend extra Tiingo quota chasing a rate limit or a bad ticker.
+  return await withRetry(async () => {
+    const res = await fetch(url, {
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Token ${token}`,
+      },
+    })
+
+    if (res.status === 404) return [] // unknown ticker: skip
+    if (!res.ok) {
+      const msg = `Tiingo ${symbol} failed: ${res.status} ${res.statusText}`
+      // 429 / 4xx -> non-retryable; 5xx -> retryable transient upstream error.
+      throw isRetryableHttpStatus(res.status) ? retryableError(msg) : nonRetryableError(msg)
+    }
+
+    const rows = (await res.json()) as TiingoRow[]
+    if (!Array.isArray(rows)) return []
+
+    return rows.map((r) => ({
+      symbol,
+      date: r.date.slice(0, 10),
+      // Adjusted values so splits/dividends don't create artificial jumps.
+      open: round2(r.adjOpen ?? r.open),
+      high: round2(r.adjHigh ?? r.high),
+      low: round2(r.adjLow ?? r.low),
+      close: round2(r.adjClose ?? r.close),
+      volume: Math.round(r.adjVolume ?? r.volume ?? 0),
+    }))
   })
-
-  if (res.status === 404) return [] // unknown ticker: skip
-  if (!res.ok) {
-    throw new Error(`Tiingo ${symbol} failed: ${res.status} ${res.statusText}`)
-  }
-
-  const rows = (await res.json()) as TiingoRow[]
-  if (!Array.isArray(rows)) return []
-
-  return rows.map((r) => ({
-    symbol,
-    date: r.date.slice(0, 10),
-    // Adjusted values so splits/dividends don't create artificial jumps.
-    open: round2(r.adjOpen ?? r.open),
-    high: round2(r.adjHigh ?? r.high),
-    low: round2(r.adjLow ?? r.low),
-    close: round2(r.adjClose ?? r.close),
-    volume: Math.round(r.adjVolume ?? r.volume ?? 0),
-  }))
 }
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100
+}
+
+/** Best-effort message extraction from an unknown thrown value. */
+function errMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e)
 }
 
 // Persist a single run record. Best-effort: logging must never mask the actual
@@ -315,29 +255,51 @@ Deno.serve(async (req) => {
     symbols = explicitSymbols
   } else if (watchlistId) {
     // Per-list run: scope symbols to this watchlist and grab its name for logs.
-    const { data: listRow, error: listErr } = await supabase
-      .from('watchlists')
-      .select('name')
-      .eq('id', watchlistId)
-      .maybeSingle()
-    if (listErr) return await failResolve(`watchlist lookup failed: ${listErr.message}`)
-    watchlistName = (listRow as { name: string } | null)?.name ?? null
+    // These reads hit Supabase PostgREST (not Tiingo), so retrying transient
+    // 504s here is free of any rate-limit concern and stops a single blip from
+    // zeroing out an entire run (the dominant failure mode we observed).
+    try {
+      const listRow = await withRetry(async () => {
+        const { data, error } = await supabase
+          .from('watchlists')
+          .select('name')
+          .eq('id', watchlistId)
+          .maybeSingle()
+        if (error) throw retryableError(error.message)
+        return data as { name: string } | null
+      })
+      watchlistName = listRow?.name ?? null
+    } catch (e) {
+      return await failResolve(`watchlist lookup failed: ${errMessage(e)}`)
+    }
 
-    const { data, error } = await supabase
-      .from('watchlist')
-      .select('symbol')
-      .eq('active', true)
-      .eq('watchlist_id', watchlistId)
-    if (error) return await failResolve(`watchlist read failed: ${error.message}`)
-    symbols = (data ?? []).map((r) => (r as { symbol: string }).symbol)
+    try {
+      symbols = await withRetry(async () => {
+        const { data, error } = await supabase
+          .from('watchlist')
+          .select('symbol')
+          .eq('active', true)
+          .eq('watchlist_id', watchlistId)
+        if (error) throw retryableError(error.message)
+        return (data ?? []).map((r) => (r as { symbol: string }).symbol)
+      })
+    } catch (e) {
+      return await failResolve(`watchlist read failed: ${errMessage(e)}`)
+    }
   } else {
     // No list + no explicit symbols: the whole active universe (manual sweep).
-    const { data, error } = await supabase
-      .from('watchlist')
-      .select('symbol')
-      .eq('active', true)
-    if (error) return await failResolve(`watchlist read failed: ${error.message}`)
-    symbols = (data ?? []).map((r) => (r as { symbol: string }).symbol)
+    try {
+      symbols = await withRetry(async () => {
+        const { data, error } = await supabase
+          .from('watchlist')
+          .select('symbol')
+          .eq('active', true)
+        if (error) throw retryableError(error.message)
+        return (data ?? []).map((r) => (r as { symbol: string }).symbol)
+      })
+    } catch (e) {
+      return await failResolve(`watchlist read failed: ${errMessage(e)}`)
+    }
   }
 
   const resolvedCount = symbols.length
@@ -345,10 +307,10 @@ Deno.serve(async (req) => {
   // ── Smart catch-up: drop symbols that already hold today's bar ───────────
   let skipped = 0
   if (mode === 'catchup' && symbols.length > 0) {
-    // Compare against the latest FINAL trading day (not the raw calendar date):
-    // the freshest bar Tiingo can return is the last completed session's, so a
-    // symbol is "current" when it already holds a bar for effectiveTradingDay.
-    const freshDay = effectiveTradingDay()
+    // Compare against the latest SAFELY PUBLISHED trading day (not the raw
+    // calendar date, and not a session that just closed and isn't published yet):
+    // a symbol is "current" when it already holds a bar for effectiveCatchupDay.
+    const freshDay = effectiveCatchupDay()
     const { data: freshRows, error: freshErr } = await supabase
       .from('prices')
       .select('symbol')
