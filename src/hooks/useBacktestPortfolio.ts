@@ -518,35 +518,32 @@ export function useBacktestPortfolio() {
    * symbol already exists it's left untouched and its id returned.
    */
   const openTrade = useCallback((input: OpenTradeInput): string => {
-    let resultId = ''
-    // The position actually created this call (null when a dup/invalid no-op),
-    // captured so we can persist just that new row to Supabase after setState.
-    let created: BacktestPosition | null = null
-    setState((s) => {
-      const existing = s.positions.find((p) => p.symbol === input.symbol)
-      if (existing) {
-        resultId = existing.id
-        return s
-      }
-      editedRef.current = true
-      const shares = Math.max(1, Math.floor(input.shares))
-      const riskReward = input.riskReward ?? DEFAULT_RISK_REWARD
-      const today = todayISO()
-      // Moment-in-time anchor: the exact submit instant (UTC). For a limit order
-      // this is the "line in the sand" that keeps it from filling on the bar it
-      // was placed on — fills are only eligible on sessions strictly after this.
-      const placedAt = new Date().toISOString()
+    // Build the candidate position up front, OUTSIDE setState. The setState
+    // updater must be pure: React invokes it twice under StrictMode/dev, and if
+    // the "did I create a row?" decision lives inside the updater, the second
+    // run sees the row the first run just appended and mis-classifies the trade
+    // as a duplicate — so `insertTradeRemote` was never called and the trade
+    // never reached Supabase (the empty-table bug). Deciding dup-ness and
+    // constructing the row here keeps the updater a plain, idempotent append.
+    const shares = Math.max(1, Math.floor(input.shares))
+    const riskReward = input.riskReward ?? DEFAULT_RISK_REWARD
+    const today = todayISO()
+    // Moment-in-time anchor: the exact submit instant (UTC). For a limit order
+    // this is the "line in the sand" that keeps it from filling on the bar it
+    // was placed on — fills are only eligible on sessions strictly after this.
+    const placedAt = new Date().toISOString()
 
-      if (input.orderType === 'limit') {
-        const limitPrice = input.limitPrice
-        if (!Number.isFinite(limitPrice) || (limitPrice as number) <= 0) return s
+    let candidate: BacktestPosition | null = null
+    if (input.orderType === 'limit') {
+      const limitPrice = input.limitPrice
+      if (Number.isFinite(limitPrice) && (limitPrice as number) > 0) {
         const levels = managedLevels(input.side, limitPrice as number, {
           distal: input.distal,
           atr: input.atr,
           swingTarget: input.swingTarget,
           riskReward,
         })
-        const position: BacktestPosition = {
+        candidate = {
           id: makeId(),
           symbol: input.symbol,
           name: input.name,
@@ -570,49 +567,67 @@ export function useBacktestPortfolio() {
           shares,
           ...levels,
         }
-        resultId = position.id
-        created = position
-        return { ...s, positions: [position, ...s.positions] }
       }
-
+    } else {
       // Market order — fill now at the current price.
       const price = input.price
-      if (!Number.isFinite(price) || price <= 0) return s
-      const levels = managedLevels(input.side, price, {
-        distal: input.distal,
-        atr: input.atr,
-        swingTarget: input.swingTarget,
-        riskReward,
-      })
-      const position: BacktestPosition = {
-        id: makeId(),
-        symbol: input.symbol,
-        name: input.name,
-        side: input.side,
-        status: 'open',
-        orderType: 'market',
-        placedDate: today,
-        placedAt,
-        openedDate: today,
-        entryPrice: price,
-        distalPrice: input.distal,
-        atr: input.atr,
-        swingTarget: input.swingTarget,
-        zoneKind: input.zoneKind,
-        zoneGrade: input.zoneGrade,
-        signalStrength: input.signalStrength,
-        proximalPrice: input.proximal,
-        signalDate: input.signalDate,
-        riskReward,
-        shares,
-        ...levels,
+      if (Number.isFinite(price) && price > 0) {
+        const levels = managedLevels(input.side, price, {
+          distal: input.distal,
+          atr: input.atr,
+          swingTarget: input.swingTarget,
+          riskReward,
+        })
+        candidate = {
+          id: makeId(),
+          symbol: input.symbol,
+          name: input.name,
+          side: input.side,
+          status: 'open',
+          orderType: 'market',
+          placedDate: today,
+          placedAt,
+          openedDate: today,
+          entryPrice: price,
+          distalPrice: input.distal,
+          atr: input.atr,
+          swingTarget: input.swingTarget,
+          zoneKind: input.zoneKind,
+          zoneGrade: input.zoneGrade,
+          signalStrength: input.signalStrength,
+          proximalPrice: input.proximal,
+          signalDate: input.signalDate,
+          riskReward,
+          shares,
+          ...levels,
+        }
       }
-      resultId = position.id
-      created = position
-      return { ...s, positions: [position, ...s.positions] }
+    }
+
+    // Invalid input (bad price/limit) — nothing to place.
+    if (!candidate) return ''
+
+    // Decide dup-ness against the CURRENT positions once, before setState, so
+    // the answer can't be corrupted by a double-invoked updater. `created` is
+    // what we actually appended (null when a same-symbol position already
+    // exists), captured for the Supabase insert below.
+    let resultId = candidate.id
+    let created: BacktestPosition | null = candidate
+    setState((s) => {
+      const existing = s.positions.find((p) => p.symbol === input.symbol)
+      if (existing) {
+        // A position for this symbol already exists — leave it untouched.
+        resultId = existing.id
+        created = null
+        return s
+      }
+      editedRef.current = true
+      // Pure append: same input state → same output, safe to run twice.
+      return { ...s, positions: [candidate as BacktestPosition, ...s.positions] }
     })
+
     // Persist the new position to Supabase (fire-and-forget). Only when one was
-    // actually created — a dup symbol or invalid input is a no-op.
+    // actually appended — a dup symbol is a no-op.
     if (created) void insertTradeRemote(created)
     return resultId
   }, [])
