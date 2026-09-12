@@ -1912,6 +1912,23 @@
   border-color: var(--neon-purple);
 }
 
+/* "Show traded" toggle — reveals signals already acted on. Sits inline with the
+   filter controls, aligned to their bottom edge like the clear-filters button. */
+.em-control-toggle {
+  flex-direction: row;
+  align-items: center;
+  align-self: flex-end;
+  gap: 6px;
+  cursor: pointer;
+}
+.em-control-toggle input {
+  cursor: pointer;
+  accent-color: var(--neon-purple);
+}
+.em-control-toggle .em-control-label {
+  cursor: pointer;
+}
+
 /* ── Summary pill ── */
 .em-summary {
   display: flex;

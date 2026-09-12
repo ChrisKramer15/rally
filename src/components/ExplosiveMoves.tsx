@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useExplosiveMoves, type ExplosiveMove, type ExplosiveGrade } from '../hooks/useExplosiveMoves'
 import { useBasingZones } from '../hooks/useBasingZones'
 import { formatCurrency, type Stock } from '../data/stocks'
@@ -300,6 +300,9 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
   // === 10 === current state, so no re-render fires and the DOM keeps the "0".
   const [freshnessText, setFreshnessText] = useState('10')
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
+  // Traded signals are hidden by default so the list stays a to-do of things
+  // you haven't acted on yet. Flip this to review the ones you've already taken.
+  const [showTraded, setShowTraded] = useState(false)
 
   // Persistent user filters — stay put until changed or cleared, even across
   // app restarts (see useSignalFilters).
@@ -329,6 +332,31 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
     [zones],
   )
 
+  // Signals you've already traded — keyed by symbol + the signal's origin date
+  // (the zone's explosive move-away date, stored on each order as `signalDate`).
+  // Keying on the DATE, not just the symbol, means a brand-new zone on a symbol
+  // you've traded before still shows: only the exact signal you acted on is
+  // suppressed. Both open positions and banked closed trades count as "traded".
+  const tradedSignals = useMemo(() => {
+    const keys = new Set<string>()
+    const add = (symbol?: string, signalDate?: string) => {
+      if (symbol && signalDate) keys.add(`${symbol}|${signalDate}`)
+    }
+    for (const p of portfolio.positions) add(p.symbol, p.signalDate)
+    for (const t of portfolio.closed) add(t.symbol, t.signalDate)
+    return keys
+  }, [portfolio.positions, portfolio.closed])
+
+  // True when this move's current zone matches a signal you've already traded.
+  const isTraded = useCallback(
+    (symbol: string): boolean => {
+      const zone = zoneBySymbol.get(symbol)
+      if (!zone) return false
+      return tradedSignals.has(`${symbol}|${zone.explosiveDate}`)
+    },
+    [zoneBySymbol, tradedSignals],
+  )
+
   // The Signals page is about *actionable* signals. A signal is only tradeable
   // under the supply/demand method when it has a real zone — a base plus an
   // explosive move away — that hasn't been used yet. So a signal is shown only
@@ -341,14 +369,18 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
   // Signals that pass the actionability rules (fresh move + fresh tradeable
   // zone) but BEFORE the user's display filters. This is the pool the filters
   // narrow, and the base for how many are hidden.
+  //   • it hasn't already been traded (unless "show traded" is on) — placing an
+  //     order on a signal takes it off this to-do list
   const actionable = useMemo(
     () =>
       allMoves.filter((m) => {
         if (!m.latest.isFresh) return false
         const zone = zoneBySymbol.get(m.symbol)
-        return zone != null && !zone.mitigated
+        if (zone == null || zone.mitigated) return false
+        if (!showTraded && isTraded(m.symbol)) return false
+        return true
       }),
-    [allMoves, zoneBySymbol],
+    [allMoves, zoneBySymbol, showTraded, isTraded],
   )
 
   // Reward:risk per actionable signal, computed from its zone at the proximal
@@ -415,6 +447,15 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
     if (!m.latest.isFresh) return false
     const zone = zoneBySymbol.get(m.symbol)
     return zone == null || zone.mitigated
+  }).length
+  // Fresh, tradeable signals suppressed only because you've already traded them.
+  // Counted independently of `showTraded` so the tally reflects how many exist,
+  // and the toggle can advertise them even while it's off.
+  const tradedHidden = allMoves.filter((m) => {
+    if (!m.latest.isFresh) return false
+    const zone = zoneBySymbol.get(m.symbol)
+    if (zone == null || zone.mitigated) return false
+    return isTraded(m.symbol)
   }).length
 
   return (
@@ -571,6 +612,18 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
             </select>
           </label>
 
+          {(tradedHidden > 0 || showTraded) && (
+            <label className="em-control em-control-toggle">
+              <input
+                type="checkbox"
+                checked={showTraded}
+                onChange={(e) => setShowTraded(e.target.checked)}
+                aria-label="Show signals you've already traded"
+              />
+              <span className="em-control-label">Show traded</span>
+            </label>
+          )}
+
           {filtersActive && (
             <button
               type="button"
@@ -625,6 +678,14 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
               title={`${noFreshZoneHidden} fresh move(s) hidden — no fresh supply/demand zone to trade (either no qualifying base, or the zone is already used)`}
             >
               · {noFreshZoneHidden} no fresh zone
+            </span>
+          )}
+          {tradedHidden > 0 && !showTraded && (
+            <span
+              className="em-skipped"
+              title={`${tradedHidden} signal(s) hidden because you've already placed a trade on them — turn on "Show traded" to see them`}
+            >
+              · {tradedHidden} traded
             </span>
           )}
           {(skippedCount > 0 || uncachedCount > 0) && (
