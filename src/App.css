@@ -475,6 +475,15 @@
   border-radius: 14px;
   padding: 20px;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5), var(--glow);
+  /* Never grow taller than the viewport (minus the overlay's 20px padding on
+     each side); scroll the modal's own content instead of spilling actions off
+     screen. Critical on short mobile viewports where the trade ticket is tall. */
+  max-height: calc(100vh - 40px);
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
+  /* Momentum scrolling + keep the scroll contained to the modal on iOS. */
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 .wl-modal-head {

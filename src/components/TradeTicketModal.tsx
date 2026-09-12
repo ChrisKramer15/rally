@@ -15,9 +15,10 @@ const STOP_BUFFER_ATR = 0.1
 const FALLBACK_STOP_PCT = 0.08
 
 /**
- * Default position sizing risks at most this fraction of the portfolio if the
- * stop-loss is hit: shares are chosen so shares × |entry − stop| ≤ 1% × budget.
- * Shares are whole numbers and rounded DOWN, so the risk never exceeds 1%.
+ * Default position sizing risks at most this fraction of TOTAL PORTFOLIO VALUE
+ * if the stop-loss is hit: shares are chosen so
+ * shares × |entry − stop| ≤ 1% × portfolioValue. Shares are whole numbers and
+ * rounded DOWN, so the loss at the stop never exceeds 1% of the account.
  */
 const RISK_PCT = 0.01
 
@@ -26,8 +27,11 @@ interface TradeTicketModalProps {
   name?: string
   /** Current market price (entry for a market order). */
   price: number
-  /** Portfolio budget, used to seed a sensible default share count. */
-  budget: number
+  /**
+   * Total portfolio value (cash + market value of open positions). The default
+   * share count is sized so a stop-loss hit loses at most 1% of this.
+   */
+  portfolioValue: number
   /**
    * The symbol's proximal line from its most recent basing zone, if any. Used
    * as the default limit price. When absent, limit defaults to current price.
@@ -56,7 +60,7 @@ export function TradeTicketModal({
   symbol,
   name,
   price,
-  budget,
+  portfolioValue,
   proximal,
   distal,
   atr,
@@ -129,17 +133,17 @@ export function TradeTicketModal({
   }, [side, entry, distal, atr, swingTarget])
 
   // Risk-based default sizing: pick the largest whole share count whose total
-  // loss at the stop stays within RISK_PCT of the budget. Rounded DOWN so the
-  // stop-loss cost never crosses 1%. Falls back to null when we can't size
-  // (no valid entry/stop or zero risk per share).
+  // loss at the stop stays within RISK_PCT of total portfolio value. Rounded
+  // DOWN so the stop-loss cost never crosses 1%. Falls back to null when we
+  // can't size (no valid entry/stop or zero risk per share).
   const riskSizedShares = useMemo(() => {
-    if (!preview || !(entry > 0) || !(budget > 0)) return null
+    if (!preview || !(entry > 0) || !(portfolioValue > 0)) return null
     const riskPerShare = Math.abs(entry - preview.stop)
     if (!(riskPerShare > 0)) return null
-    const maxLoss = budget * RISK_PCT
+    const maxLoss = portfolioValue * RISK_PCT
     const n = Math.floor(maxLoss / riskPerShare)
     return n >= 1 ? n : null
-  }, [preview, entry, budget])
+  }, [preview, entry, portfolioValue])
 
   // The value shown in the shares box: the user's typed value once they've
   // edited it, otherwise the live risk-based default (recomputed as side / order
@@ -150,7 +154,8 @@ export function TradeTicketModal({
   const estCost = shares * entry
 
   // The dollar loss if the stop is hit at the current share count — shown so the
-  // user can see the 1% sizing and confirm a manual override stays in budget.
+  // user can see the 1% sizing and confirm a manual override stays within 1% of
+  // total portfolio value.
   const riskAmount = preview ? shares * Math.abs(entry - preview.stop) : null
 
   const canSubmit =
@@ -303,7 +308,9 @@ export function TradeTicketModal({
                 <span className="tt-level-label">Risk at stop</span>
                 <span className="tt-level-val tt-level-risk">${formatCurrency(riskAmount)}</span>
                 <span className="tt-level-note">
-                  {budget > 0 ? `${((riskAmount / budget) * 100).toFixed(2)}% of budget` : 'sized to 1%'}
+                  {portfolioValue > 0
+                    ? `${((riskAmount / portfolioValue) * 100).toFixed(2)}% of portfolio`
+                    : 'sized to 1%'}
                 </span>
               </div>
             )}

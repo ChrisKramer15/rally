@@ -18,7 +18,7 @@ import { DataPipeline } from './components/DataPipeline'
 import { ExplosiveMoves } from './components/ExplosiveMoves'
 import { Backtest } from './components/Backtest'
 import { useBacktestPortfolio, type TradeSide } from './hooks/useBacktestPortfolio'
-import { atrFromBars } from './data/tradeMath'
+import { atrFromBars, computePortfolioSummary } from './data/tradeMath'
 import './App.css'
 
 type View = 'dashboard' | 'signals' | 'backtest' | 'pipeline'
@@ -169,6 +169,14 @@ function App() {
     fillPending(barsBySymbol)
     settleOpen(barsBySymbol)
   }, [stocks, orderSymbols, fillPending, settleOpen])
+
+  // Total account value (cash + market value of open positions) — the base the
+  // trade ticket sizes its 1%-risk default against, so a stop-out costs ≤1% of
+  // the whole portfolio, not just the starting budget.
+  const portfolioSummary = useMemo(
+    () => computePortfolioSummary(portfolio.budget, portfolio.positions, stocks, portfolio.closed),
+    [portfolio.budget, portfolio.positions, stocks, portfolio.closed],
+  )
 
   // Ticker tape is always sorted alphabetically, regardless of the watchlist's
   // own sort control.
@@ -321,7 +329,7 @@ function App() {
           symbol={tradeStock.symbol}
           name={tradeStock.name}
           price={tradeStock.price}
-          budget={portfolio.budget}
+          portfolioValue={portfolioSummary.totalValue}
           proximal={tradeZone?.proximal ?? null}
           distal={tradeZone?.distal ?? null}
           atr={tradeZone?.atr ?? null}
