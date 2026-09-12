@@ -276,6 +276,11 @@ function makeId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
+/** Await a fixed delay — used to back off between hydrate retries. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 // The trade's calendar date as the user sees it — EASTERN time, not UTC. A
 // UTC date would roll to "tomorrow" for any trade placed after ~8pm ET.
 function todayISO(): string {
@@ -425,31 +430,61 @@ export function useBacktestPortfolio() {
   // user made before the async read returned (mirrors useWatchlist).
   const editedRef = useRef(false)
 
-  // Mirror every state change into the localStorage cache (fast next-render).
+  // True once the Supabase hydrate has finished (successfully or not). Until
+  // then we must NOT overwrite the localStorage cache with the empty initial
+  // state — on mobile, where localStorage is often evicted between sessions,
+  // that empty write would destroy the only local copy before the durable rows
+  // from Supabase have had a chance to load, so a slow/failed fetch left the
+  // user with no trades on screen AND an emptied cache.
+  const hydratedRef = useRef(false)
+
+  // Mirror every state change into the localStorage cache (fast next-render),
+  // but only after the first hydrate. This keeps the initial empty state from
+  // clobbering a cache that a slower Supabase read is about to repopulate.
   useEffect(() => {
+    if (!hydratedRef.current) return
     persist({ budget, positions, closed })
   }, [budget, positions, closed])
 
-  // Hydrate from Supabase once on mount. Supabase is the source of truth; the
-  // local cache just seeds the first paint. Skip if the user already edited.
+  // Hydrate from Supabase on mount. Supabase is the source of truth; the local
+  // cache just seeds the first paint. A failed read (unconfigured, or a network
+  // flake/timeout — common on mobile) is retried a few times with backoff and
+  // NEVER adopted as an empty portfolio: keep whatever local state we have so a
+  // transient mobile fetch failure can't wipe durable trades on refresh.
   useEffect(() => {
     let cancelled = false
     void (async () => {
-      const remote = await fetchPortfolio()
-      if (cancelled || editedRef.current) return
-      // Nothing to adopt when Supabase is off/empty — keep the local state.
-      if (remote.budget === null && remote.positions.length === 0 && remote.closed.length === 0) {
+      // A handful of attempts covers the flaky-mobile-network case without
+      // hammering; each backs off a little longer than the last.
+      const delays = [0, 800, 2000, 4000]
+      for (let attempt = 0; attempt < delays.length; attempt++) {
+        if (delays[attempt] > 0) await sleep(delays[attempt])
+        if (cancelled || editedRef.current) return
+
+        const remote = await fetchPortfolio()
+        if (cancelled || editedRef.current) return
+
+        // Read didn't reach Supabase (off or errored). Don't touch local state;
+        // retry (unless this was the last attempt), and leave the cache intact.
+        if (!remote.ok) {
+          if (attempt === delays.length - 1) hydratedRef.current = true
+          continue
+        }
+
+        // Successful read — adopt it as the source of truth, even when it's
+        // genuinely empty (a real reset should clear the local cache too).
+        setState((prev) => {
+          const next: PersistShape = {
+            budget: remote.budget ?? prev.budget,
+            positions: remote.positions,
+            closed: remote.closed,
+          }
+          persist(next)
+          return next
+        })
+        hydratedRef.current = true
         return
       }
-      setState((prev) => {
-        const next: PersistShape = {
-          budget: remote.budget ?? prev.budget,
-          positions: remote.positions,
-          closed: remote.closed,
-        }
-        persist(next)
-        return next
-      })
     })()
     return () => {
       cancelled = true

@@ -198,17 +198,32 @@ export interface RemotePortfolio {
   budget: number | null
   positions: BacktestPosition[]
   closed: ClosedTrade[]
+  /**
+   * Whether the read actually reached Supabase and returned data. False when
+   * Supabase is unconfigured OR any query errored (network flake, timeout —
+   * common on mobile). The caller MUST NOT treat an unsuccessful read as an
+   * empty portfolio: doing so is what wiped trades on refresh, because a failed
+   * mobile fetch looks identical to a genuinely empty account. When false, keep
+   * the local state and try again rather than adopting empties.
+   */
+  ok: boolean
 }
 
 /**
  * Hydrate the whole portfolio in one pass: budget + open/pending trades +
- * closed history. Returns nulls/empties when Supabase is off or on error, so
- * the caller can keep its local state.
+ * closed history.
+ *
+ * Returns `ok: false` when Supabase is off OR any of the three reads errored,
+ * so the caller can tell a real "empty account" (`ok: true`, no rows) apart
+ * from a "read failed" (`ok: false`). Treating the latter as empty is what
+ * cleared trades on mobile refreshes, where a flaky/slow network makes the
+ * fetch fail while the durable rows are still sitting in Postgres.
  */
 export async function fetchPortfolio(): Promise<RemotePortfolio> {
   const supabase = getSupabase()
-  if (!supabase) return { budget: null, positions: [], closed: [] }
+  if (!supabase) return { budget: null, positions: [], closed: [], ok: false }
 
+  let ok = true
   const [portfolioRes, tradesRes, closedRes] = await Promise.all([
     supabase.from('portfolio').select('budget').eq('id', 'default').maybeSingle(),
     supabase.from('trades').select('*').order('created_at', { ascending: false }),
@@ -217,26 +232,29 @@ export async function fetchPortfolio(): Promise<RemotePortfolio> {
 
   let budget: number | null = null
   if (portfolioRes.error) {
-    console.warn(`Portfolio budget read skipped: ${portfolioRes.error.message}`)
+    ok = false
+    console.warn(`Portfolio budget read failed: ${portfolioRes.error.message}`)
   } else {
     budget = num((portfolioRes.data as { budget: number | string } | null)?.budget) ?? null
   }
 
   let positions: BacktestPosition[] = []
   if (tradesRes.error) {
-    console.warn(`Trades read skipped: ${tradesRes.error.message}`)
+    ok = false
+    console.warn(`Trades read failed: ${tradesRes.error.message}`)
   } else {
     positions = ((tradesRes.data ?? []) as TradeRow[]).map(rowToPosition)
   }
 
   let closed: ClosedTrade[] = []
   if (closedRes.error) {
-    console.warn(`Closed trades read skipped: ${closedRes.error.message}`)
+    ok = false
+    console.warn(`Closed trades read failed: ${closedRes.error.message}`)
   } else {
     closed = ((closedRes.data ?? []) as ClosedTradeRow[]).map(rowToClosed)
   }
 
-  return { budget, positions, closed }
+  return { budget, positions, closed, ok }
 }
 
 // ── Writes (all best-effort, fire-and-forget from the hook) ─────────────────
