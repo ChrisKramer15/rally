@@ -3259,3 +3259,53 @@
     width: 100%;
   }
 }
+
+/* Persistence-failure banner — shown when a paper trade fails to save to
+   Supabase. High-contrast so it's obvious on mobile; wraps its diagnostic
+   detail so the PostgREST message/code is legible. */
+.trade-persist-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin: 0.5rem 0.75rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid #b91c1c;
+  border-left-width: 4px;
+  border-radius: 8px;
+  background: #2a0f0f;
+  color: #fecaca;
+  font-size: 0.85rem;
+  line-height: 1.35;
+}
+
+.trade-persist-error__body {
+  flex: 1 1 auto;
+}
+
+.trade-persist-error__body strong {
+  color: #fee2e2;
+}
+
+.trade-persist-error__detail {
+  display: block;
+  margin-top: 0.35rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  color: #fca5a5;
+  word-break: break-word;
+}
+
+.trade-persist-error__dismiss {
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  color: #fecaca;
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.25rem;
+}
+
+.trade-persist-error__dismiss:hover {
+  color: #fff;
+}

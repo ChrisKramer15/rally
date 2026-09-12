@@ -193,6 +193,27 @@ function App() {
 
   return (
     <div className="dashboard">
+      {/* Persistence-failure banner: a trade did NOT save to Supabase. This
+          replaces the old silent console.warn so the user (and we) can see the
+          exact reason a trade vanishes on refresh — the `code` pinpoints it. */}
+      {portfolio.writeError && (
+        <div className="trade-persist-error" role="alert">
+          <div className="trade-persist-error__body">
+            <strong>Trade didn’t save.</strong> Your last change ({portfolio.writeError.op}) failed
+            to persist{portfolio.writeError.code ? ` (code ${portfolio.writeError.code})` : ''} and
+            will disappear on refresh.
+            <span className="trade-persist-error__detail">{portfolio.writeError.message}</span>
+          </div>
+          <button
+            type="button"
+            className="trade-persist-error__dismiss"
+            onClick={portfolio.clearWriteError}
+            aria-label="Dismiss error"
+          >
+            ×
+          </button>
+        </div>
+      )}
       {/* Ticker tape — always alphabetized, independent of watchlist sort. */}
       <div className="ticker-tape">
         <div

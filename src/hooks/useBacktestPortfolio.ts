@@ -10,9 +10,11 @@ import {
   insertClosedTrade as insertClosedTradeRemote,
   insertClosedTrades as insertClosedTradesRemote,
   insertTrade as insertTradeRemote,
+  onTradeWriteError,
   resetRemotePortfolio,
   saveBudget as saveBudgetRemote,
   upsertTrades as upsertTradesRemote,
+  type TradeWriteError,
 } from '../data/supabaseTradesStore'
 
 /**
@@ -438,6 +440,17 @@ export function useBacktestPortfolio() {
   // user with no trades on screen AND an emptied cache.
   const hydratedRef = useRef(false)
 
+  // The most recent durable-write failure, surfaced so the UI can warn the user
+  // that a trade did NOT persist (instead of the old silent console.warn). Null
+  // when the last write succeeded / none has failed yet.
+  const [writeError, setWriteError] = useState<TradeWriteError | null>(null)
+
+  // Subscribe to store-level write failures for the lifetime of the hook.
+  useEffect(() => onTradeWriteError(setWriteError), [])
+
+  /** Dismiss the persistence-error banner. */
+  const clearWriteError = useCallback(() => setWriteError(null), [])
+
   // Mirror every state change into the localStorage cache (fast next-render),
   // but only after the first hydrate. This keeps the initial empty state from
   // clobbering a cache that a slower Supabase read is about to repopulate.
@@ -839,5 +852,19 @@ export function useBacktestPortfolio() {
     void resetRemotePortfolio(DEFAULT_BUDGET)
   }, [])
 
-  return { budget, positions, closed, setBudget, openTrade, fillPending, settleOpen, closePosition, resetPortfolio }
+  return {
+    budget,
+    positions,
+    closed,
+    setBudget,
+    openTrade,
+    fillPending,
+    settleOpen,
+    closePosition,
+    resetPortfolio,
+    /** Last durable-write failure (null if the last write persisted OK). */
+    writeError,
+    /** Dismiss the write-error banner. */
+    clearWriteError,
+  }
 }

@@ -259,6 +259,75 @@ export async function fetchPortfolio(): Promise<RemotePortfolio> {
 
 // ── Writes (all best-effort, fire-and-forget from the hook) ─────────────────
 
+/**
+ * The shape of a persistence failure surfaced to the UI. `code` is the
+ * PostgREST/Postgres error code (e.g. PGRST204, 42501, 23514) when present —
+ * that's the field that tells us exactly WHY a write was rejected.
+ */
+export interface TradeWriteError {
+  /** Which operation failed, e.g. `insertTrade AAPL`. */
+  op: string
+  code?: string
+  message: string
+  details?: string
+  hint?: string
+  /** When it happened, so a UI banner can show freshness / auto-dismiss. */
+  at: number
+}
+
+type WriteErrorListener = (error: TradeWriteError) => void
+
+// Simple pub/sub so the UI can show a banner when a durable write fails. The
+// store stays framework-agnostic; the hook subscribes and mirrors into state.
+const writeErrorListeners = new Set<WriteErrorListener>()
+
+/** Subscribe to trade-persistence failures. Returns an unsubscribe fn. */
+export function onTradeWriteError(listener: WriteErrorListener): () => void {
+  writeErrorListeners.add(listener)
+  return () => writeErrorListeners.delete(listener)
+}
+
+/**
+ * Log a Supabase write failure with its FULL diagnostic detail, not just
+ * `.message`, AND broadcast it to any UI listeners. PostgREST returns `code` /
+ * `details` / `hint` that pinpoint the cause — e.g. `PGRST204` (schema-cache
+ * column mismatch), `42501` (RLS/grant denial), `23514` (CHECK violation),
+ * `23505` (duplicate id). The old code only logged `.message` at warn level,
+ * which hid all of that, so writes failed silently and trades vanished on
+ * refresh with no clue why. `console.error` so it stands out in the
+ * mobile/remote console.
+ */
+function logWriteError(op: string, error: { message: string; code?: string; details?: string; hint?: string }): void {
+  console.error(
+    `[trades] ${op} FAILED — code=${error.code ?? 'n/a'} message="${error.message}"` +
+      (error.details ? ` details="${error.details}"` : '') +
+      (error.hint ? ` hint="${error.hint}"` : ''),
+  )
+  const payload: TradeWriteError = {
+    op,
+    code: error.code,
+    message: error.message,
+    details: error.details,
+    hint: error.hint,
+    at: Date.now(),
+  }
+  for (const listener of writeErrorListeners) {
+    try {
+      listener(payload)
+    } catch {
+      // A misbehaving listener must never break the write path.
+    }
+  }
+}
+
+/** Emit a "client not configured" failure the same way, for missing env vars. */
+function reportUnconfigured(op: string): void {
+  logWriteError(op, {
+    message: 'Supabase client is not configured (missing VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY)',
+    code: 'NO_CLIENT',
+  })
+}
+
 /** Update the single-row budget. */
 export async function saveBudget(budget: number): Promise<void> {
   const supabase = getSupabase()
@@ -267,15 +336,26 @@ export async function saveBudget(budget: number): Promise<void> {
     .from('portfolio')
     .update({ budget, updated_at: new Date().toISOString() })
     .eq('id', 'default')
-  if (error) console.warn(`Save budget failed: ${error.message}`)
+  if (error) logWriteError('saveBudget', error)
 }
 
-/** Insert a newly-placed position (pending or open). */
-export async function insertTrade(position: BacktestPosition): Promise<void> {
+/**
+ * Insert a newly-placed position (pending or open). Returns true on success,
+ * false on failure — so the caller can tell whether the trade actually reached
+ * the durable store rather than assuming it did.
+ */
+export async function insertTrade(position: BacktestPosition): Promise<boolean> {
   const supabase = getSupabase()
-  if (!supabase) return
+  if (!supabase) {
+    reportUnconfigured(`insertTrade ${position.symbol}`)
+    return false
+  }
   const { error } = await supabase.from('trades').insert(positionToRow(position))
-  if (error) console.warn(`Insert trade ${position.symbol} failed: ${error.message}`)
+  if (error) {
+    logWriteError(`insertTrade ${position.symbol}`, error)
+    return false
+  }
+  return true
 }
 
 /**
@@ -285,55 +365,73 @@ export async function insertTrade(position: BacktestPosition): Promise<void> {
  */
 export async function upsertTrade(position: BacktestPosition): Promise<void> {
   const supabase = getSupabase()
-  if (!supabase) return
+  if (!supabase) {
+    reportUnconfigured(`upsertTrade ${position.symbol}`)
+    return
+  }
   const row = { ...positionToRow(position), updated_at: new Date().toISOString() }
   const { error } = await supabase.from('trades').upsert(row, { onConflict: 'id' })
-  if (error) console.warn(`Upsert trade ${position.symbol} failed: ${error.message}`)
+  if (error) logWriteError(`upsertTrade ${position.symbol}`, error)
 }
 
 /** Bulk-upsert positions (used when a fill/settle changes several at once). */
 export async function upsertTrades(positions: BacktestPosition[]): Promise<void> {
   if (positions.length === 0) return
   const supabase = getSupabase()
-  if (!supabase) return
+  if (!supabase) {
+    reportUnconfigured('upsertTrades')
+    return
+  }
   const now = new Date().toISOString()
   const rows = positions.map((p) => ({ ...positionToRow(p), updated_at: now }))
   const { error } = await supabase.from('trades').upsert(rows, { onConflict: 'id' })
-  if (error) console.warn(`Upsert trades failed: ${error.message}`)
+  if (error) logWriteError('upsertTrades', error)
 }
 
 /** Remove a position row by id (cancel a pending order, or move to closed). */
 export async function deleteTrade(id: string): Promise<void> {
   const supabase = getSupabase()
-  if (!supabase) return
+  if (!supabase) {
+    reportUnconfigured(`deleteTrade ${id}`)
+    return
+  }
   const { error } = await supabase.from('trades').delete().eq('id', id)
-  if (error) console.warn(`Delete trade ${id} failed: ${error.message}`)
+  if (error) logWriteError(`deleteTrade ${id}`, error)
 }
 
 /** Remove several position rows by id (used when settling multiple opens). */
 export async function deleteTrades(ids: string[]): Promise<void> {
   if (ids.length === 0) return
   const supabase = getSupabase()
-  if (!supabase) return
+  if (!supabase) {
+    reportUnconfigured('deleteTrades')
+    return
+  }
   const { error } = await supabase.from('trades').delete().in('id', ids)
-  if (error) console.warn(`Delete trades failed: ${error.message}`)
+  if (error) logWriteError('deleteTrades', error)
 }
 
 /** Bank a closed trade into `closed_trades`. */
 export async function insertClosedTrade(trade: ClosedTrade): Promise<void> {
   const supabase = getSupabase()
-  if (!supabase) return
+  if (!supabase) {
+    reportUnconfigured(`insertClosedTrade ${trade.symbol}`)
+    return
+  }
   const { error } = await supabase.from('closed_trades').insert(closedToRow(trade))
-  if (error) console.warn(`Insert closed trade ${trade.symbol} failed: ${error.message}`)
+  if (error) logWriteError(`insertClosedTrade ${trade.symbol}`, error)
 }
 
 /** Bulk-insert banked closed trades (settleOpen can close several at once). */
 export async function insertClosedTrades(trades: ClosedTrade[]): Promise<void> {
   if (trades.length === 0) return
   const supabase = getSupabase()
-  if (!supabase) return
+  if (!supabase) {
+    reportUnconfigured('insertClosedTrades')
+    return
+  }
   const { error } = await supabase.from('closed_trades').insert(trades.map(closedToRow))
-  if (error) console.warn(`Insert closed trades failed: ${error.message}`)
+  if (error) logWriteError('insertClosedTrades', error)
 }
 
 /**
@@ -343,7 +441,10 @@ export async function insertClosedTrades(trades: ClosedTrade[]): Promise<void> {
  */
 export async function resetRemotePortfolio(defaultBudget: number): Promise<void> {
   const supabase = getSupabase()
-  if (!supabase) return
+  if (!supabase) {
+    reportUnconfigured('resetRemotePortfolio')
+    return
+  }
   const results = await Promise.all([
     supabase.from('trades').delete().neq('id', ''),
     supabase.from('closed_trades').delete().neq('id', ''),
@@ -353,6 +454,6 @@ export async function resetRemotePortfolio(defaultBudget: number): Promise<void>
       .eq('id', 'default'),
   ])
   for (const r of results) {
-    if (r.error) console.warn(`Reset portfolio step failed: ${r.error.message}`)
+    if (r.error) logWriteError('resetRemotePortfolio', r.error)
   }
 }
