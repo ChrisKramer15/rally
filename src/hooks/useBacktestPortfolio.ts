@@ -626,9 +626,25 @@ export function useBacktestPortfolio() {
       return { ...s, positions: [candidate as BacktestPosition, ...s.positions] }
     })
 
-    // Persist the new position to Supabase (fire-and-forget). Only when one was
-    // actually appended — a dup symbol is a no-op.
-    if (created) void insertTradeRemote(created)
+    // Persist the new position to Supabase. Only when one was actually appended
+    // — a dup symbol is a no-op. This is NOT fire-and-forget: if the durable
+    // insert fails (network flake, schema-cache mismatch, RLS rejection), the
+    // row only ever lived in local state, so the next successful hydrate — which
+    // adopts the server's rows wholesale — would silently drop it. That's the
+    // "placed a pending trade, then it disappeared" bug. On failure we roll the
+    // un-persisted position back out of local state so the UI matches reality
+    // (the write-error banner already surfaces WHY it didn't save), rather than
+    // showing a phantom order that vanishes on refresh.
+    if (created) {
+      const placed = created
+      void insertTradeRemote(placed).then((ok) => {
+        if (ok) return
+        setState((s) => {
+          if (!s.positions.some((p) => p.id === placed.id)) return s
+          return { ...s, positions: s.positions.filter((p) => p.id !== placed.id) }
+        })
+      })
+    }
     return resultId
   }, [])
 
