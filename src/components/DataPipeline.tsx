@@ -93,6 +93,13 @@ function RunRow({ run }: { run: PipelineRun }) {
         <span className={`pipe-run-stat ${run.symbolsSkipped > 0 ? 'muted' : ''}`} data-label="Skipped">
           <span className="pipe-metric">{run.symbolsSkipped}</span> skipped
         </span>
+        <span
+          className={`pipe-run-stat ${run.symbolsDeferred > 0 ? 'pipe-warn' : ''}`}
+          data-label="Deferred"
+          title="Symbols left for the next run because the hourly rate-limit budget was reached (backlog)."
+        >
+          <span className="pipe-metric">{run.symbolsDeferred}</span> deferred
+        </span>
         <span className={`pipe-run-stat ${run.symbolsFailed > 0 ? 'down' : ''}`} data-label="Failed">
           <span className="pipe-metric">{run.symbolsFailed}</span> failed
         </span>
@@ -187,6 +194,13 @@ export function DataPipeline() {
           <span className="pipe-stat-label">Bars collected</span>
           <span className="pipe-stat-value">{summary.barsCollected.toLocaleString()}</span>
           <span className="pipe-stat-sub">across tracked window</span>
+        </div>
+        <div className="panel pipe-stat-card">
+          <span className="pipe-stat-label">Deferred backlog</span>
+          <span className={`pipe-stat-value ${summary.deferredBacklog > 0 ? 'pipe-warn' : ''}`}>
+            {status === 'ready' ? summary.deferredBacklog : '—'}
+          </span>
+          <span className="pipe-stat-sub">symbols waiting (latest run per list)</span>
         </div>
         <div className="panel pipe-stat-card">
           <span className="pipe-stat-label">Last run</span>

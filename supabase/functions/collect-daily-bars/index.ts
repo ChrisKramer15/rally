@@ -40,6 +40,22 @@ const TIINGO_BASE = 'https://api.tiingo.com/tiingo/daily'
 // the first ever run for a symbol still backfills this much.
 const DEFAULT_LOOKBACK_DAYS = 400
 
+// ── Hard rolling-hour rate limit ─────────────────────────────────────────────
+// Tiingo's free tier allows ~50 requests per rolling hour. We enforce a HARD
+// budget below that so we can NEVER exceed the cap, even if a partial primary
+// failure leaves a catch-up with lots to re-fetch, or two runs land in the same
+// rolling hour. The limit is enforced at the moment of each request by counting
+// rows in tiingo_request_log over the last 60 minutes (see 0017 migration).
+const RATE_WINDOW_MINUTES = 60
+// Total requests allowed in any rolling 60-minute window (headroom under ~50).
+const HOURLY_BUDGET = 45
+// Requests RESERVED for 'primary' runs. A 'catchup' (or 'manual') run may only
+// use budget up to (HOURLY_BUDGET - PRIMARY_RESERVE), so it can never consume
+// headroom a primary needs. A 'primary' run may use the full HOURLY_BUDGET.
+// This makes primary strictly higher priority than catch-up regardless of
+// scheduling, satisfying "primaries always win budget."
+const PRIMARY_RESERVE = 40
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -139,6 +155,74 @@ function errMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
+// ── Rate-limit governor ──────────────────────────────────────────────────────
+
+/**
+ * The effective request budget for a run's mode.
+ *   • primary  -> the full HOURLY_BUDGET (highest priority).
+ *   • catchup / manual / anything else -> HOURLY_BUDGET - PRIMARY_RESERVE, so
+ *     these can never spend budget reserved for primaries.
+ * Never returns a negative number.
+ */
+function budgetForMode(mode: string): number {
+  if (mode === 'primary') return HOURLY_BUDGET
+  return Math.max(0, HOURLY_BUDGET - PRIMARY_RESERVE)
+}
+
+/**
+ * Count Tiingo requests made in the last RATE_WINDOW_MINUTES. This is the
+ * authoritative "how much have we already spent this hour" number, shared across
+ * separate Edge Function invocations via the tiingo_request_log table. On a read
+ * error we FAIL CLOSED (treat the window as full) so a probe failure can never
+ * cause us to exceed the cap.
+ */
+async function countRecentRequests(
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+): Promise<number> {
+  const since = new Date(Date.now() - RATE_WINDOW_MINUTES * 60_000).toISOString()
+  const { count, error } = await supabase
+    .from('tiingo_request_log')
+    .select('id', { count: 'exact', head: true })
+    .gte('requested_at', since)
+  if (error) return HOURLY_BUDGET // fail closed: assume no budget left
+  return count ?? 0
+}
+
+/**
+ * Record that we issued `syms.length` Tiingo requests. Best-effort: a logging
+ * failure must never crash the run (the count read fails closed anyway).
+ */
+async function recordRequests(
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  mode: string,
+  syms: string[],
+): Promise<void> {
+  if (syms.length === 0) return
+  try {
+    const now = new Date().toISOString()
+    await supabase
+      .from('tiingo_request_log')
+      .insert(syms.map((symbol) => ({ requested_at: now, mode, symbol })))
+  } catch (e) {
+    console.error('tiingo_request_log insert failed:', errMessage(e))
+  }
+}
+
+/** Best-effort prune of rows older than the rolling window; keeps the table tiny. */
+async function pruneRequestLog(
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+): Promise<void> {
+  try {
+    const cutoff = new Date(Date.now() - RATE_WINDOW_MINUTES * 60_000).toISOString()
+    await supabase.from('tiingo_request_log').delete().lt('requested_at', cutoff)
+  } catch {
+    // best-effort; stale rows only slightly inflate the count toward safety
+  }
+}
+
 // Persist a single run record. Best-effort: logging must never mask the actual
 // run outcome, so failures here are swallowed.
 async function logRun(
@@ -155,6 +239,7 @@ async function logRun(
     symbols_total: number
     symbols_failed: number
     symbols_skipped: number
+    symbols_deferred?: number
     bars_collected: number
     per_symbol: Record<string, number>
     errors: Record<string, string>
@@ -287,19 +372,19 @@ Deno.serve(async (req) => {
       return await failResolve(`watchlist read failed: ${errMessage(e)}`)
     }
   } else {
-    // No list + no explicit symbols: the whole active universe (manual sweep).
-    try {
-      symbols = await withRetry(async () => {
-        const { data, error } = await supabase
-          .from('watchlist')
-          .select('symbol')
-          .eq('active', true)
-        if (error) throw retryableError(error.message)
-        return (data ?? []).map((r) => (r as { symbol: string }).symbol)
-      })
-    } catch (e) {
-      return await failResolve(`watchlist read failed: ${errMessage(e)}`)
-    }
+    // No list + no explicit symbols would mean the WHOLE active universe (up to
+    // 400 symbols) in a single run. On Tiingo's free tier (~50 requests/hour)
+    // that instantly trips the rate limit and burns the monthly unique-symbol
+    // budget for a run that's guaranteed to mostly fail. There's no safe meaning
+    // for an unbounded sweep here: legitimate collection is the per-watchlist
+    // cron (≤40 symbols/list, staggered one list per hour), and a deliberate
+    // manual refresh must pass an explicit `symbols` list. So we HARD REFUSE an
+    // unscoped run rather than attempt it.
+    return await failResolve(
+      'Refused: unscoped full-universe sweep is disabled (Tiingo free-tier ' +
+        'rate limit). Pass a watchlistId for a per-list run, or an explicit ' +
+        'symbols[] for a bounded manual refresh.',
+    )
   }
 
   const resolvedCount = symbols.length
@@ -380,14 +465,34 @@ Deno.serve(async (req) => {
   const results: Record<string, number> = {}
   const errors: Record<string, string> = {}
 
+  // ── HARD rolling-hour rate limit ───────────────────────────────────────
+  // Each Tiingo fetch = one request. Before fetching, compute how many requests
+  // this run may still make: (mode budget) − (requests already made this hour).
+  // We fetch AT MOST that many symbols and DEFER the rest to the next scheduled
+  // run. Because the budget for a catch-up excludes PRIMARY_RESERVE, a catch-up
+  // can never eat into a primary's headroom. Fails closed on any probe error.
+  await pruneRequestLog(supabase)
+  const alreadyUsed = await countRecentRequests(supabase)
+  const modeBudget = budgetForMode(mode)
+  const remaining = Math.max(0, modeBudget - alreadyUsed)
+
+  // Split the resolved symbols into what we can fetch now vs. what must wait.
+  const toFetch = symbols.slice(0, remaining)
+  const deferred = symbols.slice(remaining)
+
+  // Reserve budget up front by recording the requests we're about to make, so a
+  // concurrent invocation counting the window sees them immediately (no race
+  // where two runs both read the same low count and both proceed).
+  await recordRequests(supabase, mode, toFetch)
+
   const fetchStart = performance.now()
   let fetchMs = 0
   let upsertMs = 0
 
   // Small concurrency: gentle on Tiingo's per-hour cap.
   const concurrency = 4
-  for (let i = 0; i < symbols.length; i += concurrency) {
-    const batch = symbols.slice(i, i + concurrency)
+  for (let i = 0; i < toFetch.length; i += concurrency) {
+    const batch = toFetch.slice(i, i + concurrency)
     await Promise.all(
       batch.map(async (sym) => {
         const t0 = performance.now()
@@ -419,6 +524,8 @@ Deno.serve(async (req) => {
     )
   }
 
+  const deferredCount = deferred.length
+
   const collected = Object.values(results).reduce((a, b) => a + b, 0)
   const failedCount = Object.keys(errors).length
   const fetchedOk = Object.keys(results).length
@@ -441,8 +548,12 @@ Deno.serve(async (req) => {
     status: failedCount === 0 ? 'success' : fetchedOk > 0 ? 'partial' : 'failure',
     ms: Math.round(fetchMs),
     detail:
-      `${fetchedOk}/${symbols.length} fetched ok` +
+      `${fetchedOk}/${toFetch.length} fetched ok` +
       (failedCount ? ` · ${failedCount} errored` : '') +
+      (deferredCount
+        ? ` · ${deferredCount} deferred (rate-limit budget ${remaining}/${modeBudget}` +
+          `${mode === 'primary' ? '' : `, ${PRIMARY_RESERVE} reserved for primary`}): ${deferred.join(', ')}`
+        : '') +
       (emptyCount ? ` · ${emptyCount} returned no data (likely delisted): ${emptySymbols.join(', ')}` : ''),
   })
   // Upsert stage reflects the write into prices.
@@ -456,11 +567,23 @@ Deno.serve(async (req) => {
 
   const status = failedCount === 0 ? 'success' : fetchedOk > 0 ? 'partial' : 'failure'
 
-  // Run-level note when symbols came back empty, so the delisted tickers are
-  // visible at a glance on the monitoring page (not just buried in per_symbol).
-  const message = emptyCount
-    ? `${emptyCount} symbol${emptyCount > 1 ? 's' : ''} returned no data (likely delisted): ${emptySymbols.join(', ')}`
-    : undefined
+  // Run-level note. Deferral (rate-limit budget spent) is a HEALTHY outcome —
+  // the leftover symbols get picked up by the next scheduled run — so it's
+  // surfaced as a message, not a failure. Empty (likely delisted) symbols are
+  // also flagged here for at-a-glance visibility on the monitoring page.
+  const messageParts: string[] = []
+  if (deferredCount) {
+    messageParts.push(
+      `${deferredCount} symbol${deferredCount > 1 ? 's' : ''} deferred to the next run ` +
+        `(hourly rate-limit budget reached): ${deferred.join(', ')}`,
+    )
+  }
+  if (emptyCount) {
+    messageParts.push(
+      `${emptyCount} symbol${emptyCount > 1 ? 's' : ''} returned no data (likely delisted): ${emptySymbols.join(', ')}`,
+    )
+  }
+  const message = messageParts.length ? messageParts.join(' | ') : undefined
 
   await logRun(supabase, {
     status,
@@ -473,6 +596,7 @@ Deno.serve(async (req) => {
     symbols_total: resolvedCount,
     symbols_failed: failedCount,
     symbols_skipped: skipped,
+    symbols_deferred: deferredCount,
     bars_collected: collected,
     per_symbol: results,
     errors,
@@ -488,6 +612,7 @@ Deno.serve(async (req) => {
     symbols: symbols.length,
     skipped,
     collected,
+    deferred: deferredCount ? deferred : undefined,
     empty: emptyCount ? emptySymbols : undefined,
     perSymbol: results,
     errors: failedCount ? errors : undefined,

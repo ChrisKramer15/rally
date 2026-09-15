@@ -37,6 +37,8 @@ export interface PipelineRun {
   symbolsFailed: number
   /** Symbols the smart catch-up skipped (already holding today's bar). */
   symbolsSkipped: number
+  /** Symbols left for the next run because the hourly rate-limit budget was hit. */
+  symbolsDeferred: number
   barsCollected: number
   perSymbol: Record<string, number>
   errors: Record<string, string>
@@ -59,6 +61,7 @@ interface PipelineRunRow {
   symbols_total: number
   symbols_failed: number
   symbols_skipped: number | null
+  symbols_deferred: number | null
   bars_collected: number
   per_symbol: Record<string, number> | null
   errors: Record<string, string> | null
@@ -80,6 +83,7 @@ function rowToRun(r: PipelineRunRow): PipelineRun {
     symbolsTotal: r.symbols_total,
     symbolsFailed: r.symbols_failed,
     symbolsSkipped: r.symbols_skipped ?? 0,
+    symbolsDeferred: r.symbols_deferred ?? 0,
     barsCollected: r.bars_collected,
     perSymbol: r.per_symbol ?? {},
     errors: r.errors ?? {},
@@ -99,7 +103,7 @@ export async function fetchPipelineRuns(limit = 50): Promise<PipelineRun[]> {
   const { data, error } = await supabase
     .from('pipeline_runs')
     .select(
-      'id,status,started_at,finished_at,duration_ms,trigger,mode,watchlist_id,watchlist_name,symbols_total,symbols_failed,symbols_skipped,bars_collected,per_symbol,errors,stages,message',
+      'id,status,started_at,finished_at,duration_ms,trigger,mode,watchlist_id,watchlist_name,symbols_total,symbols_failed,symbols_skipped,symbols_deferred,bars_collected,per_symbol,errors,stages,message',
     )
     .order('started_at', { ascending: false })
     .limit(limit)

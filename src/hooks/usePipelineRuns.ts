@@ -14,6 +14,13 @@ export interface PipelineSummary {
   successRate: number
   /** Bars collected across the loaded window. */
   barsCollected: number
+  /**
+   * Current collection backlog: symbols deferred by the MOST RECENT run of each
+   * watchlist, summed. Uses only the latest run per list because deferral rolls
+   * forward to the next run, so an older run's deferred count is already
+   * superseded — counting them would double-count the same backlog.
+   */
+  deferredBacklog: number
   lastRun: PipelineRun | null
 }
 
@@ -37,6 +44,19 @@ function summarize(runs: PipelineRun[]): PipelineSummary {
     else failure += 1
     bars += r.barsCollected
   }
+
+  // Backlog = deferred count from the latest run of each watchlist. runs are
+  // newest-first, so the first run seen for a given list key is its latest.
+  // Runs with no list attribution are keyed by id so they aren't collapsed.
+  const seenLists = new Set<string>()
+  let deferredBacklog = 0
+  for (const r of runs) {
+    const key = r.watchlistId ?? `run:${r.id}`
+    if (seenLists.has(key)) continue
+    seenLists.add(key)
+    deferredBacklog += r.symbolsDeferred
+  }
+
   return {
     totalRuns: total,
     successRuns: success,
@@ -44,6 +64,7 @@ function summarize(runs: PipelineRun[]): PipelineSummary {
     failureRuns: failure,
     successRate: total === 0 ? 0 : Math.round((success / total) * 100),
     barsCollected: bars,
+    deferredBacklog,
     // runs are newest-first, so the first element is the latest.
     lastRun: runs[0] ?? null,
   }

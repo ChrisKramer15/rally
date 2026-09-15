@@ -12,9 +12,14 @@ the flow without reading the details section.
 flowchart TD
     E["Step 5 - Nightly cron<br/>timer fires per watchlist,<br/>staggered 1 hr apart"] -.wakes up.-> B
 
-    A["Step 1 - Tiingo API<br/>raw daily price bars<br/>open/high/low/close/volume"] --> B["Step 2 - Collector function<br/>resolve symbols, fetch<br/>bars, save them"]
-    B --> C["Step 3 - Store prices<br/>write bars into the<br/>prices database table"]
-    B --> D["Step 4 - Log run<br/>record what happened:<br/>counts, errors, timing"]
+    subgraph COL["Step 2 - Collector function (runs on the server)"]
+        direction TB
+        B["Step 2a - Resolve symbols<br/>which tickers to pull<br/>for this watchlist"] --> A["Step 2b - Call Tiingo API<br/>fetch raw daily bars<br/>open/high/low/close/volume"]
+        A --> UP["Step 2c - Save bars<br/>hand off to storage"]
+    end
+
+    UP --> C["Step 3 - Store prices<br/>write bars into the<br/>prices database table"]
+    COL --> D["Step 4 - Log run<br/>record what happened:<br/>counts, errors, timing"]
 
     C --> F["Step 6 - Browser read<br/>app loads recent bars<br/>for its symbols"]
     R["Realtime push<br/>new bar just landed"] -.forces re-read.-> F
@@ -37,7 +42,7 @@ flowchart TD
     classDef server fill:#dbeafe,stroke:#2563eb,color:#1e3a8a;
     classDef client fill:#dcfce7,stroke:#16a34a,color:#14532d;
     classDef signal fill:#fef9c3,stroke:#ca8a04,color:#713f12;
-    class A,B,C,D,E,R server;
+    class A,B,C,D,E,R,UP server;
     class F,G,K,L,M,N,O client;
     class H1,H2,I,J signal;
 ```
@@ -59,23 +64,29 @@ Legend: blue = server / data collection, green = browser / UI, yellow = signal l
 
 ## Steps
 
-**1. Tiingo API** — Raw adjusted daily OHLCV bars pulled from Tiingo. The browser
-never calls Tiingo directly (no CORS, token stays secret).
-`collect-daily-bars/index.ts` → `fetchTiingoBars`
-
 **2. Collector function** — A small server-side program (a Supabase Edge Function)
-that does the actual Tiingo work, because the browser can't. It runs three
-internal stages in order:
-- *resolve* — figure out which symbols to pull (one watchlist, or the whole
-  active universe).
-- *fetch* — call Tiingo for each symbol's bars, a few at a time to stay under
-  rate limits.
-- *upsert* — write the bars into the database.
+that does the actual Tiingo work, because the browser can't. It's the only thing
+that ever connects to Tiingo. It runs three internal sub-steps in order:
+
+- **2a. Resolve symbols** — figure out which tickers to pull (one watchlist, or
+  the whole active universe).
+- **2b. Call Tiingo API** — connect to Tiingo and fetch each symbol's raw
+  adjusted daily bars (open/high/low/close/volume), a few at a time to stay under
+  rate limits. This is the single Tiingo connection. `fetchTiingoBars`
+- **2c. Save bars** — hand the fetched bars off to storage (Step 3).
 
 It has three modes: `primary` (a list's full nightly pull), `catchup` (smart —
 skips any symbol that already has today's bar, so a normal morning does almost
 nothing), and `manual` (a button-triggered refresh). `collect-daily-bars/index.ts`
 → `Deno.serve`
+
+> **Guard: no full-universe sweep.** Step 2a will only resolve symbols when it's
+> given a `watchlistId` (one list, ≤40 symbols) or an explicit `symbols[]` list.
+> An unscoped run (no watchlist, no symbols) is **hard-refused** and logged as a
+> failed run. This is deliberate: pulling all ~400 symbols at once would blow
+> past Tiingo's free-tier rate limit (~50 requests/hour) and burn the monthly
+> unique-symbol budget on a run that's guaranteed to mostly fail. Legitimate
+> collection is always per-watchlist via the nightly cron.
 
 **3. Store prices** — Bars are written into the `prices` table. Each row is keyed
 by `symbol + date`, so re-running a collection just overwrites the same rows
@@ -85,9 +96,27 @@ instead of creating duplicates (this is what "upsert" means: insert-or-update).
 and delisted-symbol detection. Viewed on the Data Pipeline page.
 `logRun`
 
-**5. Nightly cron** — Per-watchlist pg_cron jobs, staggered one hour apart, each
-with a morning smart catch-up. Auto-reschedules when watchlists change.
-`migrations/0009_per_watchlist_cron.sql`
+**5. Nightly cron** — Per-watchlist pg_cron jobs on trading days. Each list gets
+a *primary* overnight pull (staggered one hour apart so no two lists share an
+hour) plus a *smart catch-up* that re-pulls only symbols missing the latest
+completed session's bar. The catch-up ladder is also staggered one hour apart and
+timed to finish before the US market close, so it never chases a bar Tiingo
+hasn't published yet. Auto-reschedules when watchlists change.
+`migrations/0009_per_watchlist_cron.sql` (catch-up times later shifted by
+`migrations/0014_catchup_before_close.sql`)
+
+> **Hard rate-limit guarantee.** Scheduling alone can't guarantee we stay under
+> Tiingo's free-tier cap (~50 requests/rolling hour) — a partially-failed primary
+> or an overlapping run could stack requests. So the collector enforces a hard
+> budget at the moment of each request. It counts how many Tiingo requests it has
+> made in the last 60 minutes (recorded in `tiingo_request_log`, see
+> `migrations/0017_tiingo_request_log.sql`), fetches at most the remaining budget,
+> and **defers** any leftover symbols to the next scheduled run. Deferral is a
+> healthy outcome (logged as a message, not a failure). The budget is **45/hour**,
+> with **40 reserved for `primary` runs** — a `catchup`/`manual` run may only use
+> the leftover (45 − 40 = 5), so a catch-up can never spend budget a primary
+> needs. Primaries always win. On any counting error the collector fails closed
+> (assumes no budget left) so the cap can never be exceeded.
 
 **6. Browser read** — App reads the latest bars for its symbols from Supabase.
 `supabaseDailyStore.ts` → `fetchDailyBarsFromSupabase`
