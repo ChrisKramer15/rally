@@ -13,24 +13,20 @@
  *   populates that table. So the client has no external rate limit to manage;
  *   the cache is purely a freshness/perf optimization over Supabase reads.
  *
- * Usage meter:
- *   Informational only — records which symbols were seen this ET month. The
- *   real Tiingo free-tier unique-symbol budget (500/month) is now consumed by
- *   the SERVER-SIDE collector, not the browser. The meter is a rough proxy the
- *   UI can surface, not a hard client cap.
+ * NOTE: this module used to keep a local "symbols seen this month" meter, but it
+ * measured browser-local trivia, not the real Tiingo budget. The monthly
+ * unique-symbol budget (500/month) is consumed SERVER-SIDE by the collector and
+ * is now surfaced from the actual tracked-symbol count (see
+ * fetchActiveSymbolCount in supabaseDailyStore).
  */
 
-import { currentMonthKey, effectiveTradingDay, isFresh, type TradingDay } from './marketCalendar'
+import { effectiveTradingDay, isFresh, type TradingDay } from './marketCalendar'
 import type { DailyBar } from './tiingo'
-
-/** Reference value for the informational meter (mirrors Tiingo's free unique-symbol/month figure). */
-export const MONTHLY_UNIQUE_SYMBOL_CAP = 500
 
 /** Max daily bars retained per symbol. ~1 trading year covers sparklines + 20/50-day indicators. */
 export const MAX_BARS = 260
 
 const CACHE_KEY = 'rally.dailyCache.v1'
-const USAGE_KEY = 'rally.usage.v1'
 
 /** Per-symbol cache entry: the bars plus the trading day they were confirmed for. */
 export interface CachedSymbol {
@@ -42,22 +38,6 @@ export interface CachedSymbol {
 }
 
 type CacheShape = Record<string, CachedSymbol>
-
-/** Monthly usage record: which symbols were fetched this ET month + a request counter. */
-interface UsageMonth {
-  month: string // YYYY-MM (ET)
-  uniqueSymbols: string[]
-  requests: number
-}
-
-export interface UsageSnapshot {
-  month: string
-  uniqueSymbolCount: number
-  requests: number
-  cap: number
-  /** Unique-symbol budget remaining before hitting the monthly cap. */
-  remaining: number
-}
 
 function safeParse<T>(raw: string | null): T | null {
   if (!raw) return null
@@ -132,54 +112,4 @@ export function saveSymbol(
     name,
   }
   writeCache(cache)
-  recordUsage(symbol, now)
 }
-
-// ---- Usage meter ----------------------------------------------------------
-
-function readUsage(now: Date): UsageMonth {
-  const month = currentMonthKey(now)
-  const stored = safeParse<UsageMonth>(localStorage.getItem(USAGE_KEY))
-  // Reset automatically when the ET month rolls over.
-  if (!stored || stored.month !== month) {
-    return { month, uniqueSymbols: [], requests: 0 }
-  }
-  return stored
-}
-
-function writeUsage(usage: UsageMonth): void {
-  try {
-    localStorage.setItem(USAGE_KEY, JSON.stringify(usage))
-  } catch {
-    // Best-effort; the meter is advisory.
-  }
-}
-
-/** Record one fetch of `symbol` against the current month's usage. */
-export function recordUsage(symbol: string, now: Date = new Date()): void {
-  const usage = readUsage(now)
-  usage.requests += 1
-  if (!usage.uniqueSymbols.includes(symbol)) {
-    usage.uniqueSymbols.push(symbol)
-  }
-  writeUsage(usage)
-}
-
-/** Current month's usage snapshot for surfacing the remaining budget in the UI. */
-export function usageSnapshot(now: Date = new Date()): UsageSnapshot {
-  const usage = readUsage(now)
-  const uniqueSymbolCount = usage.uniqueSymbols.length
-  return {
-    month: usage.month,
-    uniqueSymbolCount,
-    requests: usage.requests,
-    cap: MONTHLY_UNIQUE_SYMBOL_CAP,
-    remaining: Math.max(0, MONTHLY_UNIQUE_SYMBOL_CAP - uniqueSymbolCount),
-  }
-}
-
-// NOTE: the browser reads bars from Supabase (our own DB), not Tiingo, so there
-// is no client-side per-request budget to gate anymore. The Tiingo free-tier
-// unique-symbol budget is now consumed SERVER-SIDE by the Edge Function
-// collector. The usage snapshot below is retained as an informational
-// "symbols seen this month" meter, not a hard client cap.

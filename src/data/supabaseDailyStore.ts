@@ -157,6 +157,30 @@ export async function fetchWatchlists(): Promise<WatchlistMeta[]> {
 }
 
 /**
+ * Count active tracked symbols across ALL watchlists. This is the real consumer
+ * of Tiingo's free-tier monthly UNIQUE-symbol budget (500/month): the collector
+ * only ever pulls tracked symbols, and a symbol lives in exactly one list, so
+ * the active-row count is exactly how many unique symbols get collected in a
+ * month. A cheap HEAD count (no rows transferred). Returns 0 when unconfigured
+ * or on error.
+ */
+export async function fetchActiveSymbolCount(): Promise<number> {
+  const supabase = getSupabase()
+  if (!supabase) return 0
+
+  const { count, error } = await supabase
+    .from('watchlist')
+    .select('symbol', { count: 'exact', head: true })
+    .eq('active', true)
+
+  if (error) {
+    console.warn(`Active symbol count skipped: ${error.message}`)
+    return 0
+  }
+  return count ?? 0
+}
+
+/**
  * Read every list WITH its active symbols in one pass. Symbols are grouped by
  * `watchlist_id`; because a symbol belongs to exactly one list, no symbol
  * appears in two lists. Ordered oldest-added-first within each list so order is

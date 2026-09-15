@@ -119,6 +119,11 @@ export const MAX_WATCHLIST = 40
 // exactly one list, so lists never double-count a symbol).
 export const MAX_WATCHLISTS = 10
 
+// Tiingo free-tier monthly UNIQUE-symbol budget. The collector pulls one unique
+// symbol per tracked ticker per month, so the count of active tracked symbols
+// is what's measured against this. Surfaced in the UI as a budget gauge.
+export const TIINGO_MONTHLY_SYMBOL_CAP = 500
+
 /** Default watchlist symbols, derived from the seed stocks. */
 export const DEFAULT_SYMBOLS: string[] = INITIAL_STOCKS.map((s) => s.symbol)
 

@@ -141,6 +141,15 @@ re-reads those from the database. When the collector writes a brand-new bar, a
 realtime push tells the app to re-read that symbol immediately, so signals update
 without waiting for a reload. `useWatchlistMarket.ts`, `dailyCache.ts`
 
+> **Budget gauge (real, not local).** The dashboard shows a
+> "{tracked}/500 symbols tracked" gauge for Tiingo's free-tier monthly
+> unique-symbol budget. It reflects *real* usage: a live count of active tracked
+> symbols across all watchlists (`fetchActiveSymbolCount`) — which is exactly
+> what the server-side collector pulls each month — measured against the 500 cap
+> (`TIINGO_MONTHLY_SYMBOL_CAP`). This replaced an older browser-local "symbols
+> cached this month" meter that measured on-device trivia and implied a limit it
+> didn't actually track.
+
 **8a. Explosive moves** — Scans every candle for an ATR-relative move (≥ 2× ATR)
 with a strong body (≥ 0.6). Volume surge lifts the grade to A+.
 `useExplosiveMoves.ts`

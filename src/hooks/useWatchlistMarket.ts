@@ -3,19 +3,24 @@ import {
   loadCached,
   partitionByFreshness,
   saveSymbol,
-  usageSnapshot,
-  type UsageSnapshot,
 } from '../data/dailyCache'
 import { effectiveTradingDay } from '../data/marketCalendar'
 import type { DailyBar } from '../data/tiingo'
 import { hasSupabase } from '../data/supabaseClient'
 import {
+  fetchActiveSymbolCount,
   fetchDailyBarsFromSupabase,
   fetchNameFromSupabase,
   subscribeToPriceUpdates,
 } from '../data/supabaseDailyStore'
 import { HISTORY_LEN } from '../data/historyStore'
-import { INITIAL_STOCKS, MAX_WATCHLIST, MAX_WATCHLISTS, type Stock } from '../data/stocks'
+import {
+  INITIAL_STOCKS,
+  MAX_WATCHLIST,
+  MAX_WATCHLISTS,
+  TIINGO_MONTHLY_SYMBOL_CAP,
+  type Stock,
+} from '../data/stocks'
 
 /**
  * Upper bound on the union feed the dashboard renders/scans. The per-list cap
@@ -28,14 +33,28 @@ const MAX_UNION_SYMBOLS = MAX_WATCHLIST * MAX_WATCHLISTS
 
 export type FeedStatus = 'live' | 'simulated' | 'loading' | 'error'
 
+/**
+ * Tiingo free-tier monthly UNIQUE-symbol budget gauge. Reflects REAL usage: the
+ * count of active tracked symbols across all watchlists (what the server-side
+ * collector actually pulls each month), measured against the 500/month cap.
+ */
+export interface SymbolBudget {
+  /** Active tracked symbols across all watchlists (real monthly consumers). */
+  tracked: number
+  /** Free-tier monthly unique-symbol cap. */
+  cap: number
+  /** Budget remaining before the cap. */
+  remaining: number
+}
+
 interface UseWatchlistMarketResult {
   stocks: Stock[]
   flash: Record<string, 'up' | 'down'>
   lastUpdated: Date | null
   status: FeedStatus
   error: string | null
-  /** Current month's unique-symbol budget usage (advisory). */
-  usage: UsageSnapshot
+  /** Tiingo monthly unique-symbol budget (tracked symbols vs the 500 cap). */
+  budget: SymbolBudget
   /** Force a refresh: re-checks freshness and reads any stale symbols. */
   refresh: () => void
 }
@@ -106,7 +125,11 @@ export function useWatchlistMarket(symbols: string[]): UseWatchlistMarketResult 
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [status, setStatus] = useState<FeedStatus>('loading')
   const [error, setError] = useState<string | null>(null)
-  const [usage, setUsage] = useState<UsageSnapshot>(() => usageSnapshot())
+  const [budget, setBudget] = useState<SymbolBudget>(() => ({
+    tracked: 0,
+    cap: TIINGO_MONTHLY_SYMBOL_CAP,
+    remaining: TIINGO_MONTHLY_SYMBOL_CAP,
+  }))
 
   const stocksRef = useRef<Stock[]>([])
   useEffect(() => {
@@ -180,7 +203,6 @@ export function useWatchlistMarket(symbols: string[]): UseWatchlistMarketResult 
           }),
         )
         if (built.length) applyStocks(built)
-        setUsage(usageSnapshot())
       }
       return hitError
     },
@@ -222,7 +244,6 @@ export function useWatchlistMarket(symbols: string[]): UseWatchlistMarketResult 
     if (stale.length === 0) {
       setStatus('live')
       setError(null)
-      setUsage(usageSnapshot())
       return
     }
 
@@ -243,6 +264,26 @@ export function useWatchlistMarket(symbols: string[]): UseWatchlistMarketResult 
       setError(null)
     }
   }, [symbolsKey, applyStocks, readSymbolsFromSupabase])
+
+  // Refresh the Tiingo monthly-symbol budget gauge whenever the tracked universe
+  // changes. Reads the REAL count of active tracked symbols from Supabase (what
+  // the server-side collector pulls each month), not a browser-local proxy.
+  useEffect(() => {
+    if (!hasSupabase()) return
+    let cancelled = false
+    void (async () => {
+      const tracked = await fetchActiveSymbolCount()
+      if (cancelled) return
+      setBudget({
+        tracked,
+        cap: TIINGO_MONTHLY_SYMBOL_CAP,
+        remaining: Math.max(0, TIINGO_MONTHLY_SYMBOL_CAP - tracked),
+      })
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [symbolsKey])
 
   // Initial load + refresh whenever the symbol set changes.
   useEffect(() => {
@@ -304,7 +345,7 @@ export function useWatchlistMarket(symbols: string[]): UseWatchlistMarketResult 
     return unsubscribe
   }, [readSymbolsFromSupabase])
 
-  return { stocks, flash, lastUpdated, status, error, usage, refresh }
+  return { stocks, flash, lastUpdated, status, error, budget, refresh }
 }
 
 /** Resolve a display name: prefer cached, else look it up in Supabase (best-effort). */

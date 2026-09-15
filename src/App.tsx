@@ -46,7 +46,7 @@ function App() {
   } = useWatchlist()
 
   // Daily watchlist data from Tiingo, cached per trading day; simulated when no key is set.
-  const { stocks, flash, lastUpdated, status, error, usage } = useWatchlistMarket(unionSymbols)
+  const { stocks, flash, lastUpdated, status, error, budget } = useWatchlistMarket(unionSymbols)
 
   // Paper-trading portfolio for the Backtest page (persisted to localStorage).
   const portfolio = useBacktestPortfolio()
@@ -283,8 +283,11 @@ function App() {
           <span className="sep">·</span>
           <span className="muted">Updated {updatedLabel}</span>
           <span className="sep">·</span>
-          <span className="muted" title="Distinct symbols this app has cached this month (informational)">
-            {usage.uniqueSymbolCount} symbols cached
+          <span
+            className="muted"
+            title="Active tracked symbols across all watchlists, against Tiingo's free-tier monthly unique-symbol budget (500/month)."
+          >
+            {budget.tracked}/{budget.cap} symbols tracked
           </span>
         </div>
       </header>
