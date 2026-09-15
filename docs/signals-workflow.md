@@ -118,8 +118,21 @@ hasn't published yet. Auto-reschedules when watchlists change.
 > needs. Primaries always win. On any counting error the collector fails closed
 > (assumes no budget left) so the cap can never be exceeded.
 
-**6. Browser read** — App reads the latest bars for its symbols from Supabase.
-`supabaseDailyStore.ts` → `fetchDailyBarsFromSupabase`
+**6. Browser read** — App reads the latest bars for its symbols from Supabase
+(the ~260 most recent daily bars per symbol). `supabaseDailyStore.ts` →
+`fetchDailyBarsFromSupabase`
+
+> **Shared read, not signals-only.** This is a single, shared data load. The bars
+> it fetches feed *everything* in the app — the homepage prices / ticker tape /
+> movers *and* the Signals page *and* the Backtest fill logic — all from one set
+> of stocks. Signals and the homepage aren't separate fetches; they're different
+> views of the same loaded bars, so a re-read updates both at once. It's shown in
+> this diagram because signals can't be computed without it: it's the bridge from
+> "bars are in the database" (Steps 1–5) to "compute signals" (Steps 8+).
+>
+> It runs only while the app is open, and fires on: initial load, watchlist
+> change, a realtime push when the collector writes a new bar, the post-close
+> trading-day rollover, or a manual refresh.
 
 **7. Cache + freshness** — To avoid re-downloading everything on every visit, the
 app keeps a local cache of bars. On load it shows the cached bars instantly, then
