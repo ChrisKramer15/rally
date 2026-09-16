@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ZoneGrade, ZoneKind } from './useBasingZones'
-import type { ExplosiveGrade } from './useExplosiveMoves'
+import type { AnyExplosiveGrade } from './useExplosiveMoves'
 import { todayEasternISO } from '../data/marketCalendar'
 import type { DailyBar } from '../data/tiingo'
 import {
@@ -130,11 +130,12 @@ export interface BacktestPosition {
   /** Zone quality grade at order time ('A+' | 'good' | 'weak'). */
   zoneGrade?: ZoneGrade
   /**
-   * Signal strength — the explosive-candle grade ('A+' | 'strong') of the move
-   * that anchored the zone, captured at order time. This is the same "signal
-   * strength" the Signals scan shows. Distinct from `zoneGrade` (base quality).
+   * Signal strength — the explosive-candle grade (A/B/C/D, or a legacy
+   * 'A+'/'strong' on pre-migration trades) of the move that anchored the zone,
+   * captured at order time. This is the same "signal strength" the Signals scan
+   * shows. Distinct from `zoneGrade` (base quality).
    */
-  signalStrength?: ExplosiveGrade
+  signalStrength?: AnyExplosiveGrade
   /**
    * The zone's proximal line (the entry edge) captured at order time. Unlike
    * `limitPrice` this is recorded for market orders too, so the signal's entry
@@ -190,8 +191,8 @@ export interface ClosedTrade {
   zoneKind?: ZoneKind
   /** Basing-zone quality grade at order time ('A+' | 'good' | 'weak'). */
   zoneGrade?: ZoneGrade
-  /** Explosive-move (signal) strength ('A+' | 'strong'). */
-  signalStrength?: ExplosiveGrade
+  /** Explosive-move (signal) strength (A/B/C/D, or legacy 'A+'/'strong'). */
+  signalStrength?: AnyExplosiveGrade
   /** The zone's proximal (entry) line captured at order time. */
   proximalPrice?: number
   /** The zone's explosive move-away date (YYYY-MM-DD). */
@@ -417,8 +418,8 @@ export interface OpenTradeInput {
   zoneKind?: ZoneKind
   /** Zone quality grade at order time. */
   zoneGrade?: ZoneGrade
-  /** Signal strength — explosive-candle grade ('A+' | 'strong'). */
-  signalStrength?: ExplosiveGrade
+  /** Signal strength — explosive-candle grade (A/B/C/D, or legacy 'A+'/'strong'). */
+  signalStrength?: AnyExplosiveGrade
   /** The zone's proximal (entry) line, recorded for market orders too. */
   proximal?: number
   /** The zone's explosive move-away date (YYYY-MM-DD). */

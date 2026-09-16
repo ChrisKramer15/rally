@@ -1,5 +1,10 @@
 import { useCallback, useMemo, useState } from 'react'
-import { useExplosiveMoves, type ExplosiveMove, type ExplosiveGrade } from '../hooks/useExplosiveMoves'
+import {
+  useExplosiveMoves,
+  gradeVisual,
+  type ExplosiveMove,
+  type ExplosiveGrade,
+} from '../hooks/useExplosiveMoves'
 import { useBasingZones } from '../hooks/useBasingZones'
 import { formatCurrency, type Stock } from '../data/stocks'
 import { loadCached } from '../data/dailyCache'
@@ -94,24 +99,24 @@ function PortfolioBar({
 }
 
 function GradeBadge({ grade }: { grade: ExplosiveGrade }) {
+  const v = gradeVisual(grade)
   return (
-    <span className={`em-grade-badge em-grade-${grade === 'A+' ? 'aplus' : 'strong'}`}>
-      {grade === 'A+' ? '⚡ A+' : '◆ Strong'}
+    <span className={`em-grade-badge em-grade-${v.key}`}>
+      {v.glyph} {v.label}
     </span>
   )
 }
 
 /**
  * Mini move bar: the fill ALWAYS encodes direction (green = up, red = down).
- * The grade is shown separately as an OUTLINE + soft glow around the bar —
- * orange for A+, pink for strong — so direction is never masked by the grade
+ * The grade is shown separately as an OUTLINE + soft glow around the bar (grade
+ * color from the shared palette) so direction is never masked by the grade
  * color (mirrors the candle-chart treatment in the detail modal).
  */
 function MoveBar({ move }: { move: ExplosiveMove }) {
   const pct      = move.latest.changePct
   const positive = pct >= 0
-  const isAplus  = move.latest.grade === 'A+'
-  const isStrong = move.latest.grade === 'strong'
+  const v        = gradeVisual(move.latest.grade)
   const barH     = 28
   const barW     = 14
 
@@ -123,17 +128,9 @@ function MoveBar({ move }: { move: ExplosiveMove }) {
   // Fill = direction only.
   const fill = positive ? 'var(--neon-green)' : 'var(--neon-red)'
 
-  // Outline = grade indicator.
-  const outline = isAplus
-    ? 'var(--neon-orange)'
-    : isStrong
-      ? 'var(--neon-pink)'
-      : 'none'
-  const glow = isAplus
-    ? 'drop-shadow(0 0 3px rgba(255,140,0,0.7))'
-    : isStrong
-      ? 'drop-shadow(0 0 3px rgba(255,61,242,0.6))'
-      : undefined
+  // Outline + glow = grade indicator (from the shared palette).
+  const outline = v.color
+  const glow = `drop-shadow(0 0 3px rgba(${v.rgb},0.65))`
 
   return (
     <svg
@@ -155,9 +152,9 @@ function MoveBar({ move }: { move: ExplosiveMove }) {
         rx={2}
         fill={fill}
         stroke={outline}
-        strokeWidth={outline === 'none' ? 0 : 1.5}
+        strokeWidth={1.5}
         opacity={0.9}
-        style={glow ? { filter: glow } : undefined}
+        style={{ filter: glow }}
       />
       <line
         x1={0} y1={barH / 2}
@@ -185,7 +182,7 @@ function MoveRow({
 
   return (
     <li
-      className={`em-row em-row-clickable ${latest.grade === 'A+' ? 'em-row-aplus' : ''}`}
+      className={`em-row em-row-clickable ${latest.grade === 'A' ? 'em-row-aplus' : ''}`}
       role="button"
       tabIndex={0}
       onClick={() => onSelect(move.symbol)}
@@ -431,13 +428,14 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
   const selectedMove = selectedSymbol
     ? allMoves.find((m) => m.symbol === selectedSymbol)
     : undefined
-  const explosiveGrades: Map<string, 'A+' | 'strong'> | undefined = selectedMove?.allGrades
+  const explosiveGrades: Map<string, ExplosiveGrade> | undefined = selectedMove?.allGrades
   const freshDates: Set<string> | undefined = selectedMove?.freshDates
 
   const isLoading = status === 'loading'
 
-  const aplusCount  = moves.filter((m) => m.latest.grade === 'A+').length
-  const strongCount = moves.length - aplusCount
+  // Per-tier counts for the summary pills.
+  const gradeCounts: Record<ExplosiveGrade, number> = { A: 0, B: 0, C: 0, D: 0 }
+  for (const m of moves) gradeCounts[m.latest.grade]++
   // Fresh moves hidden purely because their move fell outside the freshness window.
   const staleHidden = allMoves.filter((m) => !m.latest.isFresh).length
   // Fresh moves hidden because they lack a tradeable zone: either no qualifying
@@ -466,7 +464,8 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
           <h2>Explosive Moves</h2>
           <p className="em-subtitle">
             Fresh signals: a ≥{moveMultiple}× ATR move with ≥60% body in the last {freshnessDays} calendar
-            days, backed by a fresh (unused) supply/demand zone. Orange = A+ (clean body + volume surge).
+            days, backed by a fresh (unused) supply/demand zone. Graded A–D by a blended strength score
+            (move size + body + volume).
           </p>
         </div>
 
@@ -527,8 +526,10 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
               aria-label="Filter signals by grade"
             >
               <option value="all">All</option>
-              <option value="A+">A+ only</option>
-              <option value="strong">Strong only</option>
+              <option value="A">A only</option>
+              <option value="B">B only</option>
+              <option value="C">C only</option>
+              <option value="D">D only</option>
             </select>
           </label>
 
@@ -644,15 +645,12 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
           </div>
           {moves.length > 0 && (
             <div className="em-summary-pills">
-              {aplusCount > 0 && (
-                <span className="em-summary-pill em-summary-aplus">
-                  {aplusCount} A+
-                </span>
-              )}
-              {strongCount > 0 && (
-                <span className="em-summary-pill em-summary-strong">
-                  {strongCount} strong
-                </span>
+              {(['A', 'B', 'C', 'D'] as const).map((g) =>
+                gradeCounts[g] > 0 ? (
+                  <span key={g} className={`em-summary-pill em-summary-${gradeVisual(g).key}`}>
+                    {gradeCounts[g]} {g}
+                  </span>
+                ) : null,
               )}
             </div>
           )}
@@ -753,9 +751,9 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
 
       {/* ── Legend ── */}
       <div className="em-legend">
-        <span className="em-legend-item"><strong>⚡ A+</strong> — clean body (≥70%) + volume surge (≥1.5×)</span>
+        <span className="em-legend-item"><strong>Grade A–D</strong> — blended strength: 40% move size + 40% body + 20% volume</span>
         <span className="em-sep">·</span>
-        <span className="em-legend-item"><strong>◆ Strong</strong> — clears the bar but not both boosters</span>
+        <span className="em-legend-item"><strong>⚡ A</strong> ≥75 · <strong>◆ B</strong> ≥55 · <strong>◇ C</strong> ≥35 · <strong>· D</strong> below (all still explosive)</span>
         <span className="em-sep">·</span>
         <span className="em-legend-item"><strong>Body</strong> — |close−open| ÷ (high−low)</span>
         <span className="em-sep">·</span>

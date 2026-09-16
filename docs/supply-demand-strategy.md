@@ -34,7 +34,7 @@ A complete walkthrough of a supply/demand zone strategy the creator has traded f
   - **Proximal line** — closest to current price.
   - **Distal line** — furthest from current price.
 - **Basing quality:** best is tight, 1–4 candles. Messy 10+ candle basing signals a weak imbalance.
-- **Move away quality:** Poor → Decent → A+. A+ = explosive, large-body candles with little/no wick. Target A+.
+- **Move away quality:** graded A → D by a blended strength score (40% move size vs ATR, 40% body-to-range, 20% relative volume). A = explosive, large-body candles with little/no wick on strong volume. Target A/B. (Every graded candle still qualifies as explosive; the letter only ranks strength.)
 - **Drawing (demand):** distal at the lowest wick of the basing candles, proximal at the top of the basing body/wick. Capture the whole basing (don't cut candles). Supply is the inverse.
 - Use TradingView's **magnet tool** to snap lines precisely to wicks/highs/lows.
 - **Zone size tradeoff:**

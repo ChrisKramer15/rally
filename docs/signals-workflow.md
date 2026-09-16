@@ -151,8 +151,16 @@ without waiting for a reload. `useWatchlistMarket.ts`, `dailyCache.ts`
 > didn't actually track.
 
 **8a. Explosive moves** — Scans every candle for an ATR-relative move (≥ 2× ATR)
-with a strong body (≥ 0.6). Volume surge lifts the grade to A+.
-`useExplosiveMoves.ts`
+with a strong body (≥ 0.6). Candles that clear that gate are then **graded A–D**
+by a blended 0–100 strength score: 40% magnitude (move size in ATR, capped at
+5×), 40% conviction (body-to-range, capped at 1.0), and 20% participation
+(relative volume, capped at 3×). Bins: A ≥ 75 · B ≥ 55 · C ≥ 35 · else D. Every
+tier is still a genuine explosive move; the grade only ranks how strong. Volume
+is a booster (20% weight), not a gate. `useExplosiveMoves.ts`
+
+> **Grades persist.** A trade records the signal's grade at order time. Trades
+> placed before the A–D scheme keep their old 'A+'/'strong' label; those legacy
+> values still render but are never produced for new signals.
 
 **8b. Basing zones** — An explosive move on its own isn't tradeable — you need a
 level to trade *against*. This step starts at each explosive candle and walks

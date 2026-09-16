@@ -17,6 +17,7 @@
 
 import { getSupabase } from './supabaseClient'
 import type { BacktestPosition, ClosedTrade } from '../hooks/useBacktestPortfolio'
+import type { AnyExplosiveGrade } from '../hooks/useExplosiveMoves'
 
 // ── Row shapes (snake_case columns as stored in Postgres) ───────────────────
 
@@ -37,7 +38,7 @@ interface TradeRow {
   swing_target: number | string | null
   zone_kind: 'demand' | 'supply' | null
   zone_grade: 'A+' | 'good' | 'weak' | null
-  signal_strength: 'A+' | 'strong' | null
+  signal_strength: AnyExplosiveGrade | null
   proximal_price: number | string | null
   signal_date: string | null
   risk_reward: number | string
@@ -59,7 +60,7 @@ interface ClosedTradeRow {
   closed_date: string
   zone_kind: 'demand' | 'supply' | null
   zone_grade: 'A+' | 'good' | 'weak' | null
-  signal_strength: 'A+' | 'strong' | null
+  signal_strength: AnyExplosiveGrade | null
   proximal_price: number | string | null
   signal_date: string | null
   order_type: 'market' | 'limit' | null

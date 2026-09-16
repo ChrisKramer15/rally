@@ -1620,20 +1620,36 @@
   background: rgba(34, 227, 255, 0.03);
 }
 
-/* Orange outline for explosive (A+) candle */
-.td-stats-explosive {
+/* Grade-colored outline for the stats strip of a graded candle. Keyed by
+   grade family: A/A+ = orange, B/strong = pink, C = cyan, D = muted. */
+.td-stats-grade-a,
+.td-stats-grade-aplus {
   border: 1px solid rgba(255, 140, 0, 0.35);
   border-radius: 10px;
   padding: 6px;
   background: rgba(255, 140, 0, 0.04);
 }
 
-/* Pink outline for strong candle */
-.td-stats-strong {
+.td-stats-grade-b,
+.td-stats-grade-strong {
   border: 1px solid rgba(255, 61, 242, 0.35);
   border-radius: 10px;
   padding: 6px;
   background: rgba(255, 61, 242, 0.04);
+}
+
+.td-stats-grade-c {
+  border: 1px solid rgba(34, 227, 255, 0.35);
+  border-radius: 10px;
+  padding: 6px;
+  background: rgba(34, 227, 255, 0.04);
+}
+
+.td-stats-grade-d {
+  border: 1px solid rgba(150, 150, 170, 0.3);
+  border-radius: 10px;
+  padding: 6px;
+  background: rgba(150, 150, 170, 0.03);
 }
 
 .td-stat {
@@ -2056,6 +2072,9 @@
   white-space: nowrap;
 }
 
+/* Grade badges — A/A+ orange, B/strong pink, C cyan, D muted.
+   The legacy aplus/strong keys stay for trades placed before the A/B/C/D scheme. */
+.em-grade-a,
 .em-grade-aplus {
   color: var(--neon-orange);
   background: rgba(255, 140, 0, 0.12);
@@ -2063,10 +2082,23 @@
   text-shadow: 0 0 8px rgba(255, 140, 0, 0.5);
 }
 
+.em-grade-b,
 .em-grade-strong {
   color: var(--neon-pink);
   background: rgba(255, 61, 242, 0.08);
   border: 1px solid rgba(255, 61, 242, 0.25);
+}
+
+.em-grade-c {
+  color: var(--neon-cyan);
+  background: rgba(34, 227, 255, 0.08);
+  border: 1px solid rgba(34, 227, 255, 0.25);
+}
+
+.em-grade-d {
+  color: var(--muted);
+  background: rgba(150, 150, 170, 0.08);
+  border: 1px solid rgba(150, 150, 170, 0.25);
 }
 
 /* ── Mini move bar column ── */
@@ -2118,16 +2150,30 @@
   border-radius: 6px;
 }
 
+.em-summary-a,
 .em-summary-aplus {
   color: var(--neon-orange);
   background: rgba(255, 140, 0, 0.12);
   border: 1px solid rgba(255, 140, 0, 0.3);
 }
 
+.em-summary-b,
 .em-summary-strong {
   color: var(--neon-pink);
   background: rgba(255, 61, 242, 0.08);
   border: 1px solid rgba(255, 61, 242, 0.2);
+}
+
+.em-summary-c {
+  color: var(--neon-cyan);
+  background: rgba(34, 227, 255, 0.08);
+  border: 1px solid rgba(34, 227, 255, 0.2);
+}
+
+.em-summary-d {
+  color: var(--muted);
+  background: rgba(150, 150, 170, 0.08);
+  border: 1px solid rgba(150, 150, 170, 0.2);
 }
 
 .em-col-num {

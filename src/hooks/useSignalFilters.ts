@@ -10,8 +10,8 @@ import { useCallback, useEffect, useState } from 'react'
  * useWatchlist (lazy `useState` init + `useEffect` save).
  */
 
-/** Grade filter: any, or only A+ / only strong. */
-export type GradeFilter = 'all' | 'A+' | 'strong'
+/** Grade filter: any, or exactly one letter tier (A / B / C / D). */
+export type GradeFilter = 'all' | 'A' | 'B' | 'C' | 'D'
 
 /** Direction filter derived from the sign of the move's change %. */
 export type DirectionFilter = 'all' | 'up' | 'down'
@@ -52,7 +52,12 @@ function loadFilters(): SignalFilters {
       const parsed = JSON.parse(raw) as Partial<SignalFilters>
       return {
         grade:
-          parsed.grade === 'A+' || parsed.grade === 'strong' ? parsed.grade : 'all',
+          parsed.grade === 'A' ||
+          parsed.grade === 'B' ||
+          parsed.grade === 'C' ||
+          parsed.grade === 'D'
+            ? parsed.grade
+            : 'all',
         direction:
           parsed.direction === 'up' || parsed.direction === 'down'
             ? parsed.direction
@@ -186,9 +191,10 @@ export interface SignalZoneContext {
 /** Apply the user filters to a single signal. Returns true when it should show. */
 export function matchesFilters(
   filters: SignalFilters,
-  candle: { grade: 'A+' | 'strong'; changePct: number; atrMultiple: number; relVolume: number },
+  candle: { grade: 'A' | 'B' | 'C' | 'D'; changePct: number; atrMultiple: number; relVolume: number },
   zone: SignalZoneContext = {},
 ): boolean {
+  // Exact-tier match: the "B" filter shows only B, not "B and better".
   if (filters.grade !== 'all' && candle.grade !== filters.grade) return false
   if (filters.direction === 'up' && candle.changePct < 0) return false
   if (filters.direction === 'down' && candle.changePct >= 0) return false

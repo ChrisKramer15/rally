@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchDailyBarsFromSupabase } from '../data/supabaseDailyStore'
 import type { DailyBar } from '../data/tiingo'
 import { changePct, formatCurrency, type Stock } from '../data/stocks'
-import type { ExplosiveGrade } from '../hooks/useExplosiveMoves'
+import { gradeVisual, type AnyExplosiveGrade } from '../hooks/useExplosiveMoves'
 import { detectBasesForBars, type BasingZone } from '../hooks/useBasingZones'
 
 interface TickerDetailModalProps {
@@ -10,10 +10,11 @@ interface TickerDetailModalProps {
   onClose: () => void
   /**
    * Map of YYYY-MM-DD → grade for every explosive candle in this symbol's history.
-   * A+ candles get orange highlight; 'strong' candles get pink highlight.
-   * Absent on the regular watchlist modal — all candles render normally.
+   * Each grade is drawn in its palette color (see gradeVisual). Absent on the
+   * regular watchlist modal — all candles render normally. Accepts legacy
+   * ('A+'|'strong') values too so historical data still renders.
    */
-  explosiveGrades?: Map<string, ExplosiveGrade>
+  explosiveGrades?: Map<string, AnyExplosiveGrade>
   /**
    * Dates (YYYY-MM-DD) of explosive candles considered *fresh* (within the
    * freshness window). Fresh candles get the full outline+glow+icon treatment;
@@ -318,7 +319,7 @@ interface CandleChartProps {
   timeframe: Timeframe
   /** Measured pixel width of the chart container; drives the viewBox so nothing stretches. */
   width: number
-  explosiveGrades?: Map<string, ExplosiveGrade>
+  explosiveGrades?: Map<string, AnyExplosiveGrade>
   /** Dates of fresh explosive candles; graded candles outside this set render dimmed. */
   freshDates?: Set<string>
   /** Detected basing zones to overlay (already filtered to the visible range). */
@@ -546,8 +547,16 @@ function CandleChart({ bars, timeframe, width, explosiveGrades, freshDates, zone
             <feMergeNode in="SourceGraphic" />
           </feMerge>
         </filter>
-        {/* Matching soft glow for strong candles — same treatment, pink halo */}
+        {/* Matching soft glow for B-tier candles — same treatment, pink halo */}
         <filter id="tdPinkSoftGlow" x="-60%" y="-40%" width="220%" height="180%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="2.6" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+        {/* Matching soft glow for C-tier candles — cyan halo */}
+        <filter id="tdCyanSoftGlow" x="-60%" y="-40%" width="220%" height="180%">
           <feGaussianBlur in="SourceGraphic" stdDeviation="2.6" result="blur" />
           <feMerge>
             <feMergeNode in="blur" />
@@ -648,9 +657,8 @@ function CandleChart({ bars, timeframe, width, explosiveGrades, freshDates, zone
         const bullish = bar.close >= bar.open
 
         const grade       = explosiveGrades?.get(bar.date) ?? null
-        const isAplus     = grade === 'A+'
-        const isStrong    = grade === 'strong'
-        const isExplosive = isAplus || isStrong
+        const visual      = grade ? gradeVisual(grade) : null
+        const isExplosive = visual !== null
         const isSelected  = bar.date === selectedDate
         const isHovered   = hoveredIdx === i
         // A graded candle is "stale" when a freshness set is provided and this
@@ -658,24 +666,31 @@ function CandleChart({ bars, timeframe, width, explosiveGrades, freshDates, zone
         // but render quietly (no glow, faded outline/icon).
         const isStale     = isExplosive && freshDates !== undefined && !freshDates.has(bar.date)
         const isFreshMark = isExplosive && !isStale
+        // Pick the matching soft-glow filter by the grade's palette color.
+        const glowFilter  = visual
+          ? visual.color === 'var(--neon-orange)'
+            ? 'url(#tdOrangeSoftGlow)'
+            : visual.color === 'var(--neon-pink)'
+              ? 'url(#tdPinkSoftGlow)'
+              : visual.color === 'var(--neon-cyan)'
+                ? 'url(#tdCyanSoftGlow)'
+                : undefined
+          : undefined
 
         // The candle FILL always encodes direction: green = up, red = down, so
         // you can always read which way a highlighted candle moved.
         const color = bullish ? 'var(--neon-green)' : 'var(--neon-red)'
 
-        // The candle STROKE carries the grade as an outline: orange for A+, pink
-        // for strong, cyan for a manual selection, else it just matches the fill.
-        // Stale graded candles use a muted grade tint so they don't compete with
-        // fresh signals.
-        const strokeColor = isStale
-          ? (isAplus ? 'rgba(255,140,0,0.45)' : 'rgba(255,61,242,0.45)')
-          : isAplus
-            ? 'var(--neon-orange)'
-            : isStrong
-              ? 'var(--neon-pink)'
-              : isSelected
-                ? 'var(--neon-cyan)'
-                : color
+        // The candle STROKE carries the grade as an outline in its palette color;
+        // cyan for a manual selection; else it matches the fill. Stale graded
+        // candles use a muted grade tint so they don't compete with fresh signals.
+        const strokeColor = visual
+          ? isStale
+            ? `rgba(${visual.rgb},0.45)`
+            : visual.color
+          : isSelected
+            ? 'var(--neon-cyan)'
+            : color
 
         // Dim everything else when explosives are present OR a candle is selected.
         const dimmed = (hasAnyExplosive && !isExplosive && !isSelected) ||
@@ -706,25 +721,21 @@ function CandleChart({ bars, timeframe, width, explosiveGrades, freshDates, zone
 
         return (
           <g key={bar.date}>
-            {/* Lane highlights — fresh graded candles glow; stale ones get a
-                faint outline only (kept for context, but visually recede). */}
-            {isAplus && isFreshMark && (
+            {/* Lane highlights — fresh graded candles glow in their palette color;
+                stale ones get a faint outline only (kept for context). */}
+            {visual && isFreshMark && (
               <rect x={laneX + 0.5} y={PAD_T} width={step - 1} height={priceH}
-                fill="rgba(255,140,0,0.03)" stroke="rgba(255,140,0,0.4)" strokeWidth={1} rx={2}
-                filter="url(#tdOrangeSoftGlow)" />
+                fill={`rgba(${visual.rgb},0.03)`} stroke={`rgba(${visual.rgb},0.4)`}
+                strokeWidth={1} rx={2}
+                filter={glowFilter} />
             )}
-            {isStrong && isFreshMark && (
-              <rect x={laneX + 0.5} y={PAD_T} width={step - 1} height={priceH}
-                fill="rgba(255,61,242,0.03)" stroke="rgba(255,61,242,0.4)" strokeWidth={1} rx={2}
-                filter="url(#tdPinkSoftGlow)" />
-            )}
-            {isStale && (
+            {isStale && visual && (
               <rect x={laneX + 0.5} y={PAD_T} width={step - 1} height={priceH}
                 fill="none"
-                stroke={isAplus ? 'rgba(255,140,0,0.14)' : 'rgba(255,61,242,0.14)'}
+                stroke={`rgba(${visual.rgb},0.14)`}
                 strokeWidth={1} strokeDasharray="2 3" rx={2} />
             )}
-            {isSelected && !isAplus && (
+            {isSelected && !isExplosive && (
               <rect x={laneX} y={PAD_T} width={step} height={priceH}
                 fill="rgba(34,227,255,0.06)" rx={2} />
             )}
@@ -734,41 +745,31 @@ function CandleChart({ bars, timeframe, width, explosiveGrades, freshDates, zone
             )}
 
             {/* Candle group — glow only for fresh graded candles */}
-            <g opacity={opacity} filter={isFreshMark && isAplus ? 'url(#tdOrangeSoftGlow)' : isFreshMark && isStrong ? 'url(#tdPinkSoftGlow)' : undefined}>
+            <g opacity={opacity} filter={isFreshMark ? glowFilter : undefined}>
               {/* Wick — grade-colored outline via strokeColor (stale = thin) */}
               <line x1={cx} y1={priceY(bar.high)} x2={cx} y2={priceY(bar.low)}
-                stroke={strokeColor} strokeWidth={isFreshMark && isAplus ? 2 : isFreshMark && isStrong ? 1.5 : isSelected ? 1.5 : 1} />
+                stroke={strokeColor} strokeWidth={isFreshMark ? 2 : isSelected ? 1.5 : 1} />
               {/* Body — green (up) / red (down) fill, grade-colored outline */}
               <rect
                 x={cx - candleW / 2} y={bodyTop}
                 width={candleW} height={bodyH}
                 fill={color}
                 stroke={strokeColor}
-                strokeWidth={isFreshMark && isAplus ? 2 : isFreshMark && isStrong ? 1.5 : isSelected ? 1.5 : 1}
+                strokeWidth={isFreshMark ? 2 : isSelected ? 1.5 : 1}
                 opacity={bullish ? 0.9 : 0.75}
               />
               {/* Volume */}
               <rect x={cx - candleW / 2} y={volY} width={candleW} height={volBarH} fill={volFill} />
             </g>
 
-            {/* ⚡ annotation for A+ candles — full for fresh, faded for stale */}
-            {isAplus && (
+            {/* Grade glyph annotation — full for fresh, faded for stale */}
+            {visual && (
               <text x={cx} y={highY - 6} textAnchor="middle"
-                fontSize={isFreshMark ? 13 : 9}
+                fontSize={isFreshMark ? 12 : 8}
+                fill={visual.color}
                 opacity={isFreshMark ? 1 : 0.4}
-                style={isFreshMark ? { filter: 'drop-shadow(0 0 4px rgba(255,140,0,0.9))', pointerEvents: 'none' } : { pointerEvents: 'none' }}>
-                ⚡
-              </text>
-            )}
-
-            {/* ◆ annotation for strong candles — full for fresh, faded for stale */}
-            {isStrong && (
-              <text x={cx} y={highY - 6} textAnchor="middle"
-                fontSize={isFreshMark ? 11 : 8}
-                fill="var(--neon-pink)"
-                opacity={isFreshMark ? 1 : 0.4}
-                style={isFreshMark ? { filter: 'drop-shadow(0 0 4px rgba(255,61,242,0.9))', pointerEvents: 'none' } : { pointerEvents: 'none' }}>
-                ◆
+                style={isFreshMark ? { filter: `drop-shadow(0 0 4px rgba(${visual.rgb},0.9))`, pointerEvents: 'none' } : { pointerEvents: 'none' }}>
+                {visual.glyph}
               </text>
             )}
 
@@ -850,7 +851,7 @@ interface OhlcvStatsProps {
   bar: DailyBar
   prevBar: DailyBar | undefined
   isSelected: boolean
-  grade: ExplosiveGrade | null
+  grade: AnyExplosiveGrade | null
 }
 
 function OhlcvStats({ bar, prevBar, isSelected, grade }: OhlcvStatsProps) {
@@ -867,13 +868,12 @@ function OhlcvStats({ bar, prevBar, isSelected, grade }: OhlcvStatsProps) {
     ? ((bar.volume - prevBar.volume) / prevBar.volume) * 100
     : null
 
-  const accentColor = grade === 'A+'
-    ? 'var(--neon-orange)'
-    : grade === 'strong'
-      ? 'var(--neon-pink)'
-      : isSelected
-        ? 'var(--neon-cyan)'
-        : undefined
+  const gradeV = grade ? gradeVisual(grade) : null
+  const accentColor = gradeV
+    ? gradeV.color
+    : isSelected
+      ? 'var(--neon-cyan)'
+      : undefined
 
   const stats: { label: string; value: string; sub?: string; color?: string }[] = [
     { label: 'Open',  value: `$${formatCurrency(bar.open)}` },
@@ -907,8 +907,7 @@ function OhlcvStats({ bar, prevBar, isSelected, grade }: OhlcvStatsProps) {
   const stripClass = [
     'td-stats',
     isSelected && !grade ? 'td-stats-selected' : '',
-    grade === 'A+' ? 'td-stats-explosive' : '',
-    grade === 'strong' ? 'td-stats-strong' : '',
+    gradeV ? `td-stats-grade-${gradeV.key}` : '',
   ].filter(Boolean).join(' ')
 
   return (

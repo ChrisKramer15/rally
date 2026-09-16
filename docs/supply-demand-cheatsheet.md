@@ -13,7 +13,7 @@ Not just highs/lows. Trade the **first touch** of a **fresh** zone.
 - Basing: tight, **1–4 candles** (fewer is better).
 - Distal at lowest wick of basing (demand) / highest wick (supply). Don't cut candles.
 - Use TradingView **magnet tool** for precision.
-- **Move away = most important.** Want A+: explosive, large body, little/no wick (marubozu).
+- **Move away = most important.** Graded A–D (40% move size vs ATR · 40% body · 20% volume). Want A/B: explosive, large body, little/no wick (marubozu) on strong volume.
 
 ## Trade plan
 - **Entry:** pending **limit order** just before the proximal line.
@@ -30,7 +30,7 @@ Not just highs/lows. Trade the **first touch** of a **fresh** zone.
 - Higher timeframe always wins. Beginners: **swing trade**.
 
 ## Zone quality checklist
-- [ ] Strong / A+ move away
+- [ ] Strong move away (grade A/B)
 - [ ] Tight 1–4 candle basing
 - [ ] **Fresh** (untested)
 - [ ] Breaks an opposing zone OR removes a trend line

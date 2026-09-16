@@ -10,20 +10,34 @@
  * one. We normalize by ATR (Average True Range) so every symbol grades on the
  * same scale.
  *
- * Qualification criteria (BOTH hard requirements must pass):
+ * Qualification criteria (BOTH hard requirements must pass to be graded AT ALL):
  *   1. |close-to-close move| >= moveMultiple × ATR   (default 2× ATR)
  *      i.e. the move is at least twice the stock's normal daily range.
  *   2. body ratio >= MIN_BODY_RATIO                   (default 0.60)
  *      body ratio = |close - open| / (high - low)
  *      A pure marubozu = 1.0; a pure doji = 0.0
  *
- * Grade booster (never disqualifies — only lifts strong → A+):
- *   3. relative volume = today's volume / avg volume  (default surge >= 1.5×)
- *      Real explosive moves usually come with a participation spike.
+ * Grading (A / B / C / D) — every candle that clears the gate is still an
+ * explosive move; the grade only ranks HOW strong. We score three independent
+ * qualities on a 0–100 scale, then blend them into one weighted strength score
+ * and bin that into a letter tier:
  *
- * Grade:
- *   'A+'     — clean marubozu-quality body AND a volume surge (institutions showed up)
- *   'strong' — clears both hard requirements but isn't exceptional on shape+volume
+ *   • Magnitude    — how far it moved vs. normal (ATR multiple), 40% weight.
+ *   • Conviction   — how much of the candle was body vs. wick, 40% weight.
+ *   • Participation — today's volume vs. its 20-day average, 20% weight.
+ *
+ * Each sub-score maps its metric from the qualifying floor (0 pts) up to an
+ * "excellent" cap (100 pts), clamped so one runaway metric can't hijack the
+ * grade:
+ *   magnitude:    2× ATR → 0 … 5× ATR (or more) → 100
+ *   conviction:   0.60 body → 0 … 1.00 body → 100
+ *   participation: 1.0× vol → 0 … 3.0× vol (or more) → 100
+ *
+ * total = 0.40·magnitude + 0.40·conviction + 0.20·participation   (0–100)
+ * bins:  A ≥ 75 · B ≥ 55 · C ≥ 35 · else D
+ *
+ * Volume at 20% acts as a booster, not a gate: a great move on merely average
+ * volume can still grade well, it just can't top out at A on its own.
  *
  * Returns:
  *   - moves[]     — one entry per symbol, using the most recent qualifying candle
@@ -49,7 +63,18 @@ function calendarDaysBetween(a: string, b: string): number {
   return Math.round((bMs - aMs) / 86_400_000)
 }
 
-export type ExplosiveGrade = 'A+' | 'strong'
+/**
+ * Explosive-candle strength tier. New signals always use A/B/C/D.
+ *
+ * `LegacyExplosiveGrade` ('A+' | 'strong') is the OLD two-tier scheme. It's
+ * retained only so trades placed before the A/B/C/D migration (persisted in
+ * localStorage and Supabase) still render their stored strength. Nothing new is
+ * ever produced with a legacy value.
+ */
+export type ExplosiveGrade = 'A' | 'B' | 'C' | 'D'
+export type LegacyExplosiveGrade = 'A+' | 'strong'
+/** Any grade string we might encounter — freshly computed OR persisted legacy. */
+export type AnyExplosiveGrade = ExplosiveGrade | LegacyExplosiveGrade
 
 export interface ExplosiveCandle {
   date: string
@@ -66,6 +91,8 @@ export interface ExplosiveCandle {
   /** |close - open| / (high - low) */
   bodyRatio: number
   grade: ExplosiveGrade
+  /** Blended 0–100 strength score the grade was binned from (for display/sorting). */
+  score: number
   close: number
   prevClose: number
   /** Age in trading bars from the symbol's most recent bar (0 = latest bar). */
@@ -108,14 +135,29 @@ const DEFAULT_MOVE_MULTIPLE = 2.0
  */
 const DEFAULT_FRESHNESS_DAYS = 10
 
-/** Body-to-range ratio floor for any qualifying candle. */
+/** Body-to-range ratio floor for any qualifying candle (the conviction gate). */
 const MIN_BODY_RATIO = 0.6
 
-/** Body-to-range ratio considered marubozu-quality (contributes to A+). */
-const A_PLUS_BODY_RATIO = 0.7
+// ── Grading model: sub-score caps + weights + tier cutoffs ───────────────────
+// Each metric is mapped from its qualifying floor (0 pts) to an "excellent" cap
+// (100 pts) and clamped, so an extreme reading on one axis can't dominate.
 
-/** Relative-volume surge that counts as "institutions showed up" (contributes to A+). */
-const VOLUME_SURGE = 1.5
+/** Magnitude cap: a move of this ATR multiple (or more) scores a full 100. */
+const MAGNITUDE_CAP_ATR = 5.0
+/** Conviction cap: a body-to-range this tight (or more) scores a full 100. */
+const CONVICTION_CAP_BODY = 1.0
+/** Participation floor/cap: 1.0× (normal) → 0 pts, this multiple (or more) → 100. */
+const PARTICIPATION_CAP_VOL = 3.0
+
+/** Blend weights (must sum to 1). Magnitude + conviction lead; volume supports. */
+const WEIGHT_MAGNITUDE = 0.4
+const WEIGHT_CONVICTION = 0.4
+const WEIGHT_PARTICIPATION = 0.2
+
+/** Score cutoffs for the letter tiers. A ≥ 75 · B ≥ 55 · C ≥ 35 · else D. */
+const GRADE_A_MIN = 75
+const GRADE_B_MIN = 55
+const GRADE_C_MIN = 35
 
 /** ATR lookback (trading days). */
 const ATR_PERIOD = 14
@@ -162,15 +204,58 @@ function avgVolumeBefore(bars: DailyBar[], endIdx: number, period = VOL_PERIOD):
   return count > 0 ? sum / count : 0
 }
 
+/** Linear-map `value` from [floor, cap] onto [0, 100], clamped to that range. */
+function subScore(value: number, floor: number, cap: number): number {
+  if (cap <= floor) return 0
+  const t = (value - floor) / (cap - floor)
+  return Math.max(0, Math.min(100, t * 100))
+}
+
+/**
+ * Blend the three qualities into one 0–100 strength score.
+ *   • magnitude    (ATR multiple): floor = the qualifying moveMultiple, cap 5×
+ *   • conviction   (body ratio):   floor = MIN_BODY_RATIO, cap 1.0
+ *   • participation (rel volume):  floor 1.0× (normal), cap 3.0×
+ * Weighted 40 / 40 / 20. `moveFloor` is passed in so the magnitude sub-score is
+ * measured from whatever qualifying threshold this scan used.
+ */
+function scoreCandle(
+  atrMultiple: number,
+  bodyRatio: number,
+  relVolume: number,
+  moveFloor: number,
+): number {
+  const magnitude = subScore(atrMultiple, moveFloor, MAGNITUDE_CAP_ATR)
+  const conviction = subScore(bodyRatio, MIN_BODY_RATIO, CONVICTION_CAP_BODY)
+  const participation = subScore(relVolume, 1.0, PARTICIPATION_CAP_VOL)
+  return (
+    WEIGHT_MAGNITUDE * magnitude +
+    WEIGHT_CONVICTION * conviction +
+    WEIGHT_PARTICIPATION * participation
+  )
+}
+
+/** Bin a 0–100 strength score into a letter tier. */
+function scoreToGrade(score: number): ExplosiveGrade {
+  if (score >= GRADE_A_MIN) return 'A'
+  if (score >= GRADE_B_MIN) return 'B'
+  if (score >= GRADE_C_MIN) return 'C'
+  return 'D'
+}
+
 /**
  * Grade a qualifying candle. It already cleared the two hard requirements, so
- * here we only decide A+ vs strong using body quality + volume surge.
- * A+ requires a clean body AND a volume surge; either one alone stays "strong".
+ * here we blend magnitude + conviction + participation into a strength score
+ * and bin it into A/B/C/D. Returns both so callers can display the raw score.
  */
-function gradeCandle(bodyRatio: number, relVolume: number): ExplosiveGrade {
-  const cleanBody = bodyRatio >= A_PLUS_BODY_RATIO
-  const volumeSurge = relVolume >= VOLUME_SURGE
-  return cleanBody && volumeSurge ? 'A+' : 'strong'
+function gradeCandle(
+  atrMultiple: number,
+  bodyRatio: number,
+  relVolume: number,
+  moveFloor: number,
+): { grade: ExplosiveGrade; score: number } {
+  const score = scoreCandle(atrMultiple, bodyRatio, relVolume, moveFloor)
+  return { grade: scoreToGrade(score), score }
 }
 
 /**
@@ -187,12 +272,20 @@ export function gradeExplosiveAt(bars: DailyBar[], date: string): ExplosiveGrade
   const i = bars.findIndex((b) => b.date === date)
   if (i <= ATR_PERIOD) return null
   const bar = bars[i]
+  const prev = bars[i - 1]
   const totalRange = bar.high - bar.low
   if (totalRange === 0) return null
+
+  const atr = atrBefore(bars, i)
+  if (!atr || atr <= 0) return null
+  const atrMultiple = Math.abs(bar.close - prev.close) / atr
+
   const bodyRatio = Math.abs(bar.close - bar.open) / totalRange
   const avgVol = avgVolumeBefore(bars, i)
   const relVolume = avgVol > 0 ? bar.volume / avgVol : 1
-  return gradeCandle(bodyRatio, relVolume)
+  // Use the default qualifying floor as the magnitude baseline so a trade's
+  // stored strength matches what the Signals scan showed for that candle.
+  return gradeCandle(atrMultiple, bodyRatio, relVolume, DEFAULT_MOVE_MULTIPLE).grade
 }
 
 export function useExplosiveMoves(
@@ -254,11 +347,11 @@ export function useExplosiveMoves(
         if (atrMultiple < moveMultiple) continue
         if (bodyRatio < MIN_BODY_RATIO) continue
 
-        // ── Grade booster ──
+        // ── Participation (volume) feeds the blended score ──
         const avgVol = avgVolumeBefore(bars, i)
         const relVolume = avgVol > 0 ? bar.volume / avgVol : 1
 
-        const grade = gradeCandle(bodyRatio, relVolume)
+        const { grade, score } = gradeCandle(atrMultiple, bodyRatio, relVolume, moveMultiple)
         const changePct = ((bar.close - prev.close) / prev.close) * 100
         const gapPct = ((bar.open - prev.close) / prev.close) * 100
         const rangePct = (totalRange / prev.close) * 100
@@ -278,6 +371,7 @@ export function useExplosiveMoves(
           rangePct,
           bodyRatio,
           grade,
+          score,
           close: bar.close,
           prevClose: prev.close,
           ageBars,
@@ -310,4 +404,40 @@ export function useExplosiveMoves(
 
     return { moves, skippedCount, uncachedCount }
   }, [stocks, moveMultiple, freshnessDays])
+}
+
+// ── Shared grade presentation ────────────────────────────────────────────────
+// One place that maps ANY grade string — the new A/B/C/D tiers or a legacy
+// 'A+'/'strong' value persisted on an old trade — to a consistent visual family
+// (label, glyph, CSS suffix, and the neon palette used across the list, badges,
+// and the candle chart). Keeping this centralized means the list, the summary
+// pills, and the modal all render a given grade identically.
+
+export interface GradeVisual {
+  /** Text shown on badges/tags, e.g. 'A' or (legacy) 'A+'. */
+  label: string
+  /** Small glyph paired with the label. */
+  glyph: string
+  /** CSS class suffix: `em-grade-${key}` / `td-stats-${key}`. */
+  key: 'a' | 'b' | 'c' | 'd' | 'aplus' | 'strong'
+  /** Primary neon color (CSS var) for outlines/accents. */
+  color: string
+  /** rgba triplet (no alpha) for building tinted fills/glows in SVG. */
+  rgb: string
+}
+
+const GRADE_VISUALS: Record<AnyExplosiveGrade, GradeVisual> = {
+  // New four-tier scheme.
+  A: { label: 'A', glyph: '⚡', key: 'a', color: 'var(--neon-orange)', rgb: '255,140,0' },
+  B: { label: 'B', glyph: '◆', key: 'b', color: 'var(--neon-pink)', rgb: '255,61,242' },
+  C: { label: 'C', glyph: '◇', key: 'c', color: 'var(--neon-cyan)', rgb: '34,227,255' },
+  D: { label: 'D', glyph: '·', key: 'd', color: 'var(--muted)', rgb: '150,150,170' },
+  // Legacy values (render-only, for trades placed before the A/B/C/D migration).
+  'A+': { label: 'A+', glyph: '⚡', key: 'aplus', color: 'var(--neon-orange)', rgb: '255,140,0' },
+  strong: { label: 'Strong', glyph: '◆', key: 'strong', color: 'var(--neon-pink)', rgb: '255,61,242' },
+}
+
+/** Resolve a grade (new or legacy) to its visual family. */
+export function gradeVisual(grade: AnyExplosiveGrade): GradeVisual {
+  return GRADE_VISUALS[grade] ?? GRADE_VISUALS.D
 }
