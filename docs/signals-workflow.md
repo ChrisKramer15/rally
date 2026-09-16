@@ -170,6 +170,43 @@ stop), a profit target (the top of the move the breakout produced), a quality
 grade, and whether price has already come back to the zone (mitigated = used up).
 `useBasingZones.ts`
 
+> **Proximal is drawn to the body, not the wick — on purpose.** The strategy doc
+> describes the proximal (entry) line loosely as "the top of the basing
+> body/wick." The app deliberately snaps it to the **body** extreme (highest body
+> for demand, lowest body for supply), while the distal (stop) line stays on the
+> **wick** extreme. Body-proximal sits deeper in the zone: it's the more
+> conservative, higher-quality entry closer to the imbalance origin, at the cost
+> of fewer fills (price has to pull back further to trigger). Wick-proximal would
+> fill more often but at worse reward:risk. This is a deliberate, backtest-tunable
+> trade-off, not the looser hand-drawn convention.
+
+> **Move-away distance check (move vs. base, not move vs. ATR).** A zone only
+> survives if the breakout left the base *decisively*. This is measured as
+> `moveAwayDistance` = how far the explosive candle travelled beyond the proximal
+> (entry) edge, divided by the zone's own height — i.e. the move expressed in
+> **base heights**. Zones below `MIN_MOVE_AWAY_BASE_HEIGHTS` (default **1.5**) are
+> rejected outright. This is a *different denominator* than the Step 8a gate: 8a
+> sizes the candle against ATR ("is this candle big for this stock?"), while this
+> sizes the move against the base it left ("did the move actually escape the
+> zone?"). A big 2× ATR candle that barely clears a wide base passes 8a but is
+> filtered here, enforcing the docs' "strong move away is the most important
+> factor" rule. The threshold is a backtest-tunable knob. `useBasingZones.ts`
+
+> **Best fresh zone per symbol (not just the newest).** `useBasingZones` returns
+> *every* detected zone (a symbol can have several), and the Signals page picks
+> one representative zone per symbol via `selectSignalZone`: the best **fresh**
+> (unmitigated) zone, ranked **nearest to current price** first (the level most
+> likely to fill on a daily-timeframe pullback), tie-broken by most recent
+> explosive date, then grade. If a symbol has no fresh zone, it falls back to its
+> most-recent (used-up) zone so the "no fresh zone" tallies still read correctly.
+> This means a still-tradeable older zone is never hidden behind a newer,
+> already-mitigated one. The trade ticket seeds from the *same* helper, so the
+> row and its ticket always trade the same zone. `selectSignalZone`
+>
+> *Note:* the summary is still **one row per symbol** — if a symbol genuinely has
+> two fresh zones (e.g. demand below and supply above), only the best-ranked one
+> gets a row here; both are still drawn on the chart in the ticker detail modal.
+
 **8c. Reward:risk** — Computes R:R a zone would produce at the proximal entry.
 Single source of truth shared by Signals, the ticket, and Backtest.
 `tradeMath.ts` → `signalRewardRisk`

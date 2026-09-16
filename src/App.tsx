@@ -3,7 +3,7 @@ import { changePct } from './data/stocks'
 import { loadCached } from './data/dailyCache'
 import { formatEasternTime } from './data/marketCalendar'
 import type { DailyBar } from './data/tiingo'
-import { detectBasesForBars, type ZoneGrade, type ZoneKind } from './hooks/useBasingZones'
+import { detectBasesForBars, selectSignalZone, type ZoneGrade, type ZoneKind } from './hooks/useBasingZones'
 import { gradeExplosiveAt, type ExplosiveGrade } from './hooks/useExplosiveMoves'
 import { useIndexMarket } from './hooks/useIndexMarket'
 import { useWatchlist } from './hooks/useWatchlist'
@@ -92,7 +92,10 @@ function App() {
     const cached = loadCached([tradeSymbol])[tradeSymbol]
     if (!cached || cached.bars.length === 0) return null
     const zones = detectBasesForBars(cached.bars, tradeSymbol)
-    const latest = zones[zones.length - 1]
+    // Seed the ticket from the SAME zone the Signals row represents: the best
+    // fresh (unmitigated) zone nearest to current price, not blindly the newest
+    // one. Uses the shared selectSignalZone helper so the row and ticket agree.
+    const latest = selectSignalZone(zones, tradeStock?.price)
     if (!latest) return null
     return {
       proximal: latest.proximal,
@@ -105,7 +108,7 @@ function App() {
       strength: gradeExplosiveAt(cached.bars, latest.explosiveDate) ?? undefined,
       signalDate: latest.explosiveDate,
     }
-  }, [tradeSymbol])
+  }, [tradeSymbol, tradeStock?.price])
 
   // Place the order from the ticket, then jump to the Backtest page.
   const handleSubmitTicket = (ticket: TradeTicket) => {

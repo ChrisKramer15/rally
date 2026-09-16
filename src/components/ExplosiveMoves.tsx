@@ -5,7 +5,7 @@ import {
   type ExplosiveMove,
   type ExplosiveGrade,
 } from '../hooks/useExplosiveMoves'
-import { useBasingZones } from '../hooks/useBasingZones'
+import { useBasingZones, selectSignalZone, type BasingZone } from '../hooks/useBasingZones'
 import { formatCurrency, type Stock } from '../data/stocks'
 import { loadCached } from '../data/dailyCache'
 import { atrFromBars, signalRewardRisk, formatRatio, computePortfolioSummary } from '../data/tradeMath'
@@ -321,13 +321,38 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
     freshnessDays,
   )
 
-  // Most recent supply/demand zone per symbol (same move threshold as signals),
-  // used to keep only signals backed by a fresh, tradeable zone.
+  // ALL supply/demand zones (same move threshold as signals). A symbol can have
+  // several — a fresh level plus older/used ones — so we don't collapse them
+  // blindly into a Map (that would keep the oldest and hide the rest).
   const { zones } = useBasingZones(stocks, moveMultiple)
-  const zoneBySymbol = useMemo(
-    () => new Map(zones.map((z) => [z.symbol, z])),
-    [zones],
+
+  // Current price per symbol, for ranking zones by nearest-to-price (the zone
+  // most likely to actually fill soon on a daily-timeframe pullback).
+  const priceBySymbol = useMemo(
+    () => new Map(stocks.map((s) => [s.symbol, s.price])),
+    [stocks],
   )
+
+  // Pick the ONE representative zone per symbol for the one-row-per-symbol
+  // summary via the shared selectSignalZone helper: the best FRESH (unmitigated)
+  // zone, nearest to price, so a still-tradeable level is never hidden behind a
+  // newer, already-used one. The trade ticket in App.tsx uses the same helper,
+  // so the row and its ticket always agree on which zone is being traded.
+  const zoneBySymbol = useMemo(() => {
+    const bySymbol = new Map<string, BasingZone[]>()
+    for (const z of zones) {
+      const list = bySymbol.get(z.symbol)
+      if (list) list.push(z)
+      else bySymbol.set(z.symbol, [z])
+    }
+
+    const chosen = new Map<string, BasingZone>()
+    for (const [symbol, list] of bySymbol) {
+      const best = selectSignalZone(list, priceBySymbol.get(symbol))
+      if (best) chosen.set(symbol, best)
+    }
+    return chosen
+  }, [zones, priceBySymbol])
 
   // Signals you've already traded — keyed by symbol + the signal's origin date
   // (the zone's explosive move-away date, stored on each order as `signalDate`).

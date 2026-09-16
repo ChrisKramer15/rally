@@ -45,6 +45,15 @@ export interface BasingZone {
   swingTarget: number | null
   /** Zone height (proximal→distal) as % of the distal price. */
   baseHeightPct: number
+  /**
+   * How decisively the breakout left the base, in BASE HEIGHTS: how far the
+   * explosive candle travelled beyond the proximal (entry) edge divided by the
+   * zone's own height. This is a different denominator than the Step 8a gate —
+   * 8a measures the candle vs ATR, this measures the move vs the base it left.
+   * A big candle that barely escapes a wide base scores low here. Higher =
+   * cleaner imbalance. Zones below MIN_MOVE_AWAY_BASE_HEIGHTS are rejected.
+   */
+  moveAwayDistance: number
   /** Number of basing candles (1 = single-candle base). */
   candleCount: number
   /** First basing candle date (YYYY-MM-DD). */
@@ -71,7 +80,14 @@ export interface BasingZone {
 }
 
 export interface UseBasingZonesResult {
-  /** One entry per symbol: the most recent detected zone. */
+  /**
+   * Every detected zone across all symbols (a symbol may appear more than once).
+   * Sorted most-recent-explosive-date first. Consumers that want a single zone
+   * per symbol must select one themselves — do NOT build a `new Map(zones.map(
+   * z => [z.symbol, z]))`, since that silently keeps only the last (oldest)
+   * zone per symbol and hides the rest. See ExplosiveMoves.tsx for the
+   * "best fresh unmitigated zone per symbol" selection.
+   */
   zones: BasingZone[]
   skippedCount: number
   uncachedCount: number
@@ -95,6 +111,23 @@ const MAX_BASE_CANDLES = 7
 const PRIOR_MOVE_RANGE_MULT = 2.0
 /** Running base height must stay within this × ATR to keep extending the base. */
 const TIGHT_LIMIT_MULT = 1.5
+/**
+ * Minimum "move away" distance, measured in BASE HEIGHTS, for a zone to qualify.
+ * The breakout leg must travel at least this many times the zone's own height
+ * beyond the proximal edge, otherwise the move didn't decisively leave the base
+ * (weak imbalance). This is the move-vs-base check that the Step 8a ATR gate
+ * does NOT perform — 8a only sizes the candle against ATR.
+ *
+ * Backtest-tunable knob — trade-off:
+ *   • Lower (≈1.0) → accepts moves that barely clear the base → more signals,
+ *                    weaker imbalance, more failed zones.
+ *   • 1.5 (default) → the breakout must clear the base by 1.5× its height, a
+ *                    balance most supply/demand traders would call "decisive."
+ *   • Higher (≈2.0–3.0) → only the cleanest imbalances survive → fewer, higher-
+ *                    quality zones, at the cost of missing shallower valid ones.
+ * Sweep 1.0 / 1.5 / 2.0 on your watchlist and keep the best expectancy.
+ */
+const MIN_MOVE_AWAY_BASE_HEIGHTS = 1.5
 /** Number of bars before the base used for the "volume dried up" comparison. */
 const PRIOR_VOL_WINDOW = 10
 /**
@@ -265,6 +298,17 @@ function detectBase(
   const baseHeight = Math.abs(proximal - distal)
   const baseHeightPct = distal !== 0 ? (baseHeight / Math.abs(distal)) * 100 : 0
 
+  // Move-away distance: how far the explosive candle pushed BEYOND the proximal
+  // (entry) edge, in the trade direction, expressed in base heights. Demand
+  // rallies above proximal; supply drops below it. A degenerate (zero-height)
+  // base can't be judged this way, so it's rejected. This enforces the "strong
+  // move away is the most important factor" rule against the base itself, which
+  // the Step 8a ATR gate does not do.
+  if (baseHeight <= 0) return null
+  const travel = kind === 'demand' ? explosive.high - proximal : proximal - explosive.low
+  const moveAwayDistance = travel / baseHeight
+  if (moveAwayDistance < MIN_MOVE_AWAY_BASE_HEIGHTS) return null
+
   // Body contrast: explosive body vs average basing body.
   let baseBodySum = 0
   let baseVolSum = 0
@@ -319,6 +363,7 @@ function detectBase(
     distal,
     swingTarget,
     baseHeightPct,
+    moveAwayDistance,
     candleCount,
     startDate: bars[startIdx].date,
     endDate: bars[explosiveIdx - 1].date,
@@ -365,6 +410,44 @@ export function detectBasesForBars(
   return zones
 }
 
+/** Rank order for zone grades when breaking ties (lower = stronger). */
+const ZONE_GRADE_RANK: Record<ZoneGrade, number> = { 'A+': 0, good: 1, weak: 2 }
+
+/**
+ * Choose the single representative zone for a symbol from all its detected
+ * zones — the one the Signals row and the trade ticket should both use.
+ *
+ * Prefers the best FRESH (unmitigated) zone so a still-tradeable level is never
+ * hidden behind a newer, already-used one. Ranking among the candidate pool:
+ *   1. nearest to `price` (most likely to fill on a daily-timeframe pullback),
+ *   2. then most recent explosive date,
+ *   3. then stronger grade.
+ * If no fresh zone exists, falls back to the same ranking over ALL zones (so a
+ * mitigated-only symbol still yields a zone, which downstream code treats as
+ * "used up"). Returns null only when `zones` is empty.
+ *
+ * `price` may be omitted (e.g. price unknown); ranking then starts at rule 2.
+ */
+export function selectSignalZone(
+  zones: BasingZone[],
+  price?: number,
+): BasingZone | null {
+  if (zones.length === 0) return null
+  const fresh = zones.filter((z) => !z.mitigated)
+  const pool = fresh.length > 0 ? fresh : zones
+  return pool.reduce((a, b) => {
+    if (price != null) {
+      const da = Math.abs(a.proximal - price)
+      const db = Math.abs(b.proximal - price)
+      if (da !== db) return da < db ? a : b
+    }
+    if (a.explosiveDate !== b.explosiveDate) {
+      return a.explosiveDate > b.explosiveDate ? a : b
+    }
+    return (ZONE_GRADE_RANK[a.grade] ?? 3) <= (ZONE_GRADE_RANK[b.grade] ?? 3) ? a : b
+  })
+}
+
 export function useBasingZones(
   stocks: Stock[],
   moveMultiple: number = DEFAULT_MOVE_MULTIPLE,
@@ -391,8 +474,11 @@ export function useBasingZones(
       const symbolZones = detectBasesForBars(entry.bars, stock.symbol, moveMultiple)
       if (symbolZones.length === 0) continue
 
-      // Keep the most recent zone per symbol for the summary list.
-      zones.push(symbolZones[symbolZones.length - 1])
+      // Surface EVERY detected zone, not just the newest. A symbol can carry
+      // multiple zones (e.g. a fresh demand level plus an older mitigated one);
+      // keeping them all lets the consumer pick the best *fresh, unmitigated*
+      // zone instead of blindly taking the most recent — which could be dead.
+      zones.push(...symbolZones)
     }
 
     zones.sort((a, b) => (a.explosiveDate > b.explosiveDate ? -1 : 1))
