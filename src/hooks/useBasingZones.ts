@@ -243,6 +243,44 @@ function swingTargetAfter(
 }
 
 /**
+ * Compute the cash-out (swing-target) level for a zone as of a point in time,
+ * anchored on the explosive candle identified by `signalDate`.
+ *
+ * This is the fill-time counterpart to the swing target baked into a detected
+ * zone: when a resting limit order finally fills, its cash-out should reflect
+ * the trend structure present *at fill*, not the structure captured when the
+ * order was placed. Pass `asOfDate` (the fill bar's date) to cap the forward
+ * walk at that bar, so a leg that only completed AFTER the fill can't leak into
+ * the level. Omit `asOfDate` to measure against the full history.
+ *
+ * `kind` is the zone direction (demand = long/rally leg, supply = short/drop
+ * leg). Returns null when the date isn't found, there isn't enough history to
+ * compute ATR at the anchor, or no leg can be measured yet.
+ */
+export function swingTargetAsOf(
+  bars: DailyBar[],
+  signalDate: string,
+  kind: ZoneKind,
+  asOfDate?: string,
+): number | null {
+  const explosiveIdx = bars.findIndex((b) => b.date === signalDate)
+  if (explosiveIdx < 0) return null
+
+  const atr = atrBefore(bars, explosiveIdx)
+  if (!atr || atr <= 0) return null
+
+  // Cap the forward walk at the as-of bar so the leg reflects only price action
+  // that had actually happened by then (true "solidify at fill" semantics).
+  let scoped = bars
+  if (asOfDate) {
+    const asOfIdx = bars.findIndex((b) => b.date === asOfDate)
+    if (asOfIdx >= 0) scoped = bars.slice(0, asOfIdx + 1)
+  }
+
+  return swingTargetAfter(scoped, explosiveIdx, kind, atr)
+}
+
+/**
  * Detect a single basing zone anchored on the explosive candle at `explosiveIdx`.
  * Returns null if no valid base precedes it.
  */

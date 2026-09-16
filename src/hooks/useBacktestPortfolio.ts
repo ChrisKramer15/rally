@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ZoneGrade, ZoneKind } from './useBasingZones'
+import { swingTargetAsOf, type ZoneGrade, type ZoneKind } from './useBasingZones'
 import type { AnyExplosiveGrade } from './useExplosiveMoves'
 import { todayEasternISO } from '../data/marketCalendar'
 import type { DailyBar } from '../data/tiingo'
@@ -684,10 +684,21 @@ export function useBacktestPortfolio() {
         )
         if (!fillBar) return p
         changed = true
+        // Solidify the cash-out from the trend structure present AT FILL, not
+        // the value captured when the order was placed. A resting limit can
+        // fill days later; by then the swing leg may have extended (or only
+        // just completed), and the real-life analogue is setting your target
+        // once the trade is actually live. Recompute the swing high/low as of
+        // the fill bar; fall back to the placement-time value if it can't be
+        // measured (e.g. no signal date / too little history).
+        const filledSwing =
+          p.signalDate && p.zoneKind
+            ? swingTargetAsOf(bars, p.signalDate, p.zoneKind, fillBar.date) ?? p.swingTarget
+            : p.swingTarget
         const levels = managedLevels(p.side, limit, {
           distal: p.distalPrice,
           atr: p.atr,
-          swingTarget: p.swingTarget,
+          swingTarget: filledSwing,
           riskReward: p.riskReward,
         })
         const opened: BacktestPosition = {
@@ -697,6 +708,9 @@ export function useBacktestPortfolio() {
           // bar's date so the exit can only settle on a bar after it.
           openedDate: fillBar.date,
           entryPrice: limit,
+          // Persist the swing target as solidified at fill, so the detail panel
+          // and any later math read the committed level, not the placement one.
+          swingTarget: filledSwing,
           ...levels,
         }
         filled.push(opened)

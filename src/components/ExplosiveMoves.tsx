@@ -275,7 +275,7 @@ function MoveRow({
                   ? 'var(--neon-cyan)'
                   : 'var(--muted)',
           }}
-          title="Reward:risk if entered at the zone's proximal line (target = prior swing / 2:1 fallback; stop just beyond the distal line)"
+          title="POTENTIAL reward:risk if entered at the zone's proximal line (target = prior swing / 2:1 fallback; stop just beyond the distal line). Indicative only — the actual stop and cash-out solidify when the trade goes live (a limit order at fill), from the structure present then."
         >
           {formatRatio(rr)}
         </span>
@@ -737,7 +737,7 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
           <div className="em-col-num">ATR</div>
           <div className="em-col-num">Vol</div>
           <div className="em-col-num">Gap</div>
-          <div className="em-col-num">R:R</div>
+          <div className="em-col-num" title="Potential reward:risk — indicative until the trade goes live">R:R</div>
           <div className="em-col-num em-col-date">Date</div>
         </div>
 
@@ -786,7 +786,7 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
         <span className="em-sep">·</span>
         <span className="em-legend-item"><strong>Vol</strong> — today's volume vs 20-day average</span>
         <span className="em-sep">·</span>
-        <span className="em-legend-item"><strong>R:R</strong> — reward:risk at the zone's proximal entry (cyan ≥2, orange ≥3)</span>
+        <span className="em-legend-item"><strong>R:R</strong> — <em>potential</em> reward:risk at the zone's proximal entry (cyan ≥2, orange ≥3); solidifies when the trade goes live</span>
         <span className="em-sep">·</span>
         <span className="em-legend-item">Click any row to open the full chart</span>
       </div>

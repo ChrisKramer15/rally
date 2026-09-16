@@ -70,11 +70,14 @@ export function TradeDetails({ data }: { data: TradeDetailData }) {
         color: 'var(--neon-cyan)',
       })
     }
+    // While pending, the stop/target are a POTENTIAL preview — they only
+    // solidify when the order fills (the trade goes live). Flag them as such.
+    const potential = isPending ? '~' : ''
     if (data.stopLossPrice != null) {
-      out.push({ price: data.stopLossPrice, label: `Stop ${money(data.stopLossPrice)}`, color: 'var(--neon-red)', dashed: true })
+      out.push({ price: data.stopLossPrice, label: `${potential}Stop ${money(data.stopLossPrice)}`, color: 'var(--neon-red)', dashed: true })
     }
     if (data.cashOutPrice != null) {
-      out.push({ price: data.cashOutPrice, label: `Target ${money(data.cashOutPrice)}`, color: 'var(--neon-green)', dashed: true })
+      out.push({ price: data.cashOutPrice, label: `${potential}Target ${money(data.cashOutPrice)}`, color: 'var(--neon-green)', dashed: true })
     }
     // Exit marker for a closed trade.
     if (data.status === 'closed' && data.exitPrice != null) {
@@ -103,14 +106,15 @@ export function TradeDetails({ data }: { data: TradeDetailData }) {
       <dl className="td-facts">
         <Fact label="Explosive bar date" value={dateOrDash(data.signalDate)} />
         <Fact label="Proximal price" value={money(data.proximalPrice)} />
-        <Fact label="Stop-loss price" value={money(data.stopLossPrice)} />
+        <Fact label={isPending ? 'Stop-loss (potential)' : 'Stop-loss price'} value={money(data.stopLossPrice)} />
+        <Fact label={isPending ? 'Cash-out (potential)' : 'Cash-out price'} value={money(data.cashOutPrice)} />
         <Fact label="Limit price (placed)" value={money(data.limitPrice)} />
         <Fact label="Actual entry price" value={money(data.entryPrice)} />
         <Fact label="Actual exit price" value={money(data.exitPrice)} />
         <Fact label="Order placed" value={placedMoment(data)} />
         <Fact label="Entry date" value={dateOrDash(data.openedDate)} />
         <Fact label="Exit date" value={dateOrDash(data.closedDate)} />
-        <Fact label="Reward : risk" value={rr} highlight />
+        <Fact label={isPending ? 'Reward : risk (potential)' : 'Reward : risk'} value={rr} highlight />
       </dl>
 
       {/* ── Chart with zone band + levels ── */}
