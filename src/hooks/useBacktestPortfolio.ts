@@ -1,19 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { swingTargetAsOf, type ZoneGrade, type ZoneKind } from './useBasingZones'
+import { type ZoneGrade, type ZoneKind } from './useBasingZones'
 import type { AnyExplosiveGrade } from './useExplosiveMoves'
 import { todayEasternISO } from '../data/marketCalendar'
-import type { DailyBar } from '../data/tiingo'
 import {
   deleteTrade as deleteTradeRemote,
-  deleteTrades as deleteTradesRemote,
   fetchPortfolio,
   insertClosedTrade as insertClosedTradeRemote,
-  insertClosedTrades as insertClosedTradesRemote,
   insertTrade as insertTradeRemote,
   onTradeWriteError,
   resetRemotePortfolio,
   saveBudget as saveBudgetRemote,
-  upsertTrades as upsertTradesRemote,
+  subscribeToTradeUpdates,
   type TradeWriteError,
 } from '../data/supabaseTradesStore'
 
@@ -108,6 +105,12 @@ export interface BacktestPosition {
   placedAt?: string
   /** ISO date the position was filled/opened. Null while pending. */
   openedDate: string | null
+  /**
+   * UTC ISO instant the pending limit filled to open (live engine). Displayed
+   * in ET. Null while pending, and null for legacy fills done under the old
+   * daily-bar simulation (which had no intraday time).
+   */
+  filledAt?: string
   /** Fill price per share. Null while pending (not yet filled). */
   entryPrice: number | null
   /**
@@ -190,6 +193,10 @@ export interface ClosedTrade {
   realizedPnl: number
   openedDate: string | null
   closedDate: string
+  /** UTC ISO instant the position was filled/opened. Null for legacy trades. */
+  openedAt?: string
+  /** UTC ISO instant the position was exited/closed. Null for legacy trades. */
+  closedAt?: string
   /**
    * ── Signal provenance (carried over from the position at close) ──────────
    * Mirrors the same fields on BacktestPosition so a reviewer can correlate
@@ -317,37 +324,6 @@ function carriedDetail(p: BacktestPosition): Pick<
     placedDate: p.placedDate,
     placedAt: p.placedAt,
   }
-}
-
-/**
- * The placement-session floor for a position: the ET calendar date (YYYY-MM-DD)
- * of its moment-in-time anchor. A resting limit may only fill on a bar whose
- * session date is STRICTLY GREATER than this. Falls back to placedDate for
- * legacy rows that predate the placedAt anchor.
- */
-function placementFloor(p: BacktestPosition): string {
-  if (p.placedAt) {
-    const t = new Date(p.placedAt)
-    if (!Number.isNaN(t.getTime())) return todayEasternISO(t)
-  }
-  return p.placedDate
-}
-
-/**
- * The first bar in `bars` whose session date is strictly after `afterDate`
- * (YYYY-MM-DD) and that satisfies `hit`. Bars are assumed ascending by date
- * (as the daily cache stores them). Returns the matching bar or undefined.
- */
-function firstBarAfter(
-  bars: DailyBar[],
-  afterDate: string,
-  hit: (bar: DailyBar) => boolean,
-): DailyBar | undefined {
-  for (const bar of bars) {
-    if (bar.date <= afterDate) continue // strictly-after: skip same-session + older
-    if (hit(bar)) return bar
-  }
-  return undefined
 }
 
 /**
@@ -514,6 +490,32 @@ export function useBacktestPortfolio() {
     }
   }, [])
 
+  // Realtime: the server-side settle-positions Edge Function fills/settles
+  // positions on a cron. When it writes to `trades` / `closed_trades`, re-read
+  // the portfolio so an open browser reflects the fill/exit live. A server
+  // settlement is an authoritative external change, so we adopt it wholesale
+  // (this is why fills/exits appear without a manual refresh). We only skip the
+  // adopt if a LOCAL edit is mid-flight, to avoid a race clobbering it; the next
+  // event (or the debounce) reconciles.
+  useEffect(() => {
+    const unsubscribe = subscribeToTradeUpdates(() => {
+      void (async () => {
+        const remote = await fetchPortfolio()
+        if (!remote.ok) return
+        setState((prev) => {
+          const next: PersistShape = {
+            budget: remote.budget ?? prev.budget,
+            positions: remote.positions,
+            closed: remote.closed,
+          }
+          persist(next)
+          return next
+        })
+      })()
+    })
+    return unsubscribe
+  }, [])
+
   const setBudget = useCallback((next: number) => {
     if (!(Number.isFinite(next) && next >= 0)) return
     editedRef.current = true
@@ -666,183 +668,16 @@ export function useBacktestPortfolio() {
     return resultId
   }, [])
 
-  /**
-   * Fill any pending limit orders whose trigger price has been reached — but
-   * only on a session STRICTLY AFTER the order's moment-in-time anchor. Given a
-   * map of symbol → the symbol's cached daily bars (ascending by date), the fill
-   * walks forward from the placement session and takes the FIRST later bar that
-   * traded through the limit (an intraday touch, not just the close):
-   *   • long  — fills when a later day's LOW ≤ limit (price dipped to the line)
-   *   • short — fills when a later day's HIGH ≥ limit (price rose to the line)
-   * This is what stops the instant buy+sell: the bar the order was placed on
-   * (already complete) is never eligible, so a limit rests until real forward
-   * price reaches it. The fill records that later bar's date as openedDate, so
-   * settleOpen can in turn only exit on a bar after the fill.
-   *
-   * Filled orders flip to 'open' at the limit price with freshly derived
-   * stop-loss / cash-out levels (anchored to the stored distal line + ATR).
-   *
-   * No-op (same state reference) when nothing fills, so it won't churn renders.
-   */
-  const fillPending = useCallback((barsBySymbol: Map<string, DailyBar[]>) => {
-    // Positions that flipped pending -> open this call, to upsert to Supabase.
-    const filled: BacktestPosition[] = []
-    setState((s) => {
-      let changed = false
-      const next = s.positions.map((p) => {
-        if (p.status !== 'pending' || p.limitPrice === undefined) return p
-        const bars = barsBySymbol.get(p.symbol)
-        if (!bars || bars.length === 0) return p
-        const limit = p.limitPrice
-        // Only sessions strictly after the placement anchor are eligible.
-        const floor = placementFloor(p)
-        const fillBar = firstBarAfter(bars, floor, (bar) =>
-          p.side === 'short' ? bar.high >= limit : bar.low <= limit,
-        )
-        if (!fillBar) return p
-        changed = true
-        // Solidify the cash-out from the trend structure present AT FILL, not
-        // the value captured when the order was placed. A resting limit can
-        // fill days later; by then the swing leg may have extended (or only
-        // just completed), and the real-life analogue is setting your target
-        // once the trade is actually live. Recompute the swing high/low as of
-        // the fill bar; fall back to the placement-time value if it can't be
-        // measured (e.g. no signal date / too little history).
-        const filledSwing =
-          p.signalDate && p.zoneKind
-            ? swingTargetAsOf(bars, p.signalDate, p.zoneKind, fillBar.date) ?? p.swingTarget
-            : p.swingTarget
-        const levels = managedLevels(p.side, limit, {
-          distal: p.distalPrice,
-          atr: p.atr,
-          swingTarget: filledSwing,
-          riskReward: p.riskReward,
-        })
-        const opened: BacktestPosition = {
-          ...p,
-          status: 'open' as const,
-          // The fill happened on this later session, not "today" — record the
-          // bar's date so the exit can only settle on a bar after it.
-          openedDate: fillBar.date,
-          entryPrice: limit,
-          // Persist the swing target as solidified at fill, so the detail panel
-          // and any later math read the committed level, not the placement one.
-          swingTarget: filledSwing,
-          ...levels,
-        }
-        filled.push(opened)
-        return opened
-      })
-      return changed ? { ...s, positions: next } : s
-    })
-    // A fill is a data change even though the user didn't type anything: guard
-    // the hydrate from overwriting it, and push the updated rows to Supabase.
-    if (filled.length > 0) {
-      editedRef.current = true
-      void upsertTradesRemote(filled)
-    }
-  }, [])
-
-  /**
-   * Settle OPEN positions against their resting exit orders, the way a real
-   * broker would: a long fills its cash-out when the day's HIGH reaches the
-   * target and its stop when the day's LOW reaches the stop (inverted for a
-   * short). The exit is booked at the LEVEL that was hit (cash-out price or
-   * stop price), not the current market price — mirroring an auto-set
-   * limit/stop order. Realized P/L is banked and compounded into budget.
-   *
-   * Exits only fire on a session STRICTLY AFTER the fill bar (openedDate) — an
-   * open position is never settled on the same bar it filled on, which is the
-   * other half of the instant buy+sell fix. Given a map of symbol → the cached
-   * daily bars (ascending), it walks forward from openedDate and takes the FIRST
-   * later bar that touched the stop or target.
-   *
-   * If both the target and the stop fall inside that same day's range we can't
-   * know the intraday order from a daily bar, so we conservatively assume the
-   * STOP hit first (worst case) — never book the optimistic outcome.
-   *
-   * No-op (same state reference) when nothing settles, so it won't churn.
-   */
-  const settleOpen = useCallback((barsBySymbol: Map<string, DailyBar[]>) => {
-    // Captured for the Supabase sync after setState: the banked trades to
-    // insert, their now-removed position ids to delete, and the new budget.
-    let bankedOut: ClosedTrade[] = []
-    let newBudget: number | null = null
-    setState((s) => {
-      let budget = s.budget
-      const banked: ClosedTrade[] = []
-      const remaining: BacktestPosition[] = []
-
-      for (const p of s.positions) {
-        if (p.status !== 'open' || p.entryPrice == null) {
-          remaining.push(p)
-          continue
-        }
-        const bars = barsBySymbol.get(p.symbol)
-        if (!bars || bars.length === 0 || !p.openedDate) {
-          remaining.push(p)
-          continue
-        }
-
-        const isShort = p.side === 'short'
-        const barHits = (bar: DailyBar) => {
-          const hitTarget = isShort ? bar.low <= p.cashOutPrice : bar.high >= p.cashOutPrice
-          const hitStop = isShort ? bar.high >= p.stopLossPrice : bar.low <= p.stopLossPrice
-          return hitTarget || hitStop
-        }
-        // Only bars strictly after the fill session can settle the position.
-        const exitBar = firstBarAfter(bars, p.openedDate, barHits)
-        if (!exitBar) {
-          remaining.push(p)
-          continue
-        }
-
-        const hitStop = isShort
-          ? exitBar.high >= p.stopLossPrice
-          : exitBar.low <= p.stopLossPrice
-        // Both in-range on a daily bar: assume the stop filled first (worst case).
-        const exitPrice = hitStop ? p.stopLossPrice : p.cashOutPrice
-        const entry = p.entryPrice
-        const realizedPnl = isShort
-          ? (entry - exitPrice) * p.shares
-          : (exitPrice - entry) * p.shares
-
-        budget += realizedPnl
-        banked.push({
-          id: p.id,
-          symbol: p.symbol,
-          name: p.name,
-          side: p.side,
-          shares: p.shares,
-          entryPrice: entry,
-          exitPrice,
-          realizedPnl,
-          openedDate: p.openedDate,
-          // The exit happened on this later session, not "today".
-          closedDate: exitBar.date,
-          zoneKind: p.zoneKind,
-          zoneGrade: p.zoneGrade,
-          signalStrength: p.signalStrength,
-          proximalPrice: p.proximalPrice,
-          signalDate: p.signalDate,
-          ...carriedDetail(p),
-        })
-      }
-
-      if (banked.length === 0) return s
-      bankedOut = banked
-      newBudget = budget
-      return { ...s, budget, positions: remaining, closed: [...banked, ...s.closed] }
-    })
-    // Sync the settlement to Supabase: bank the closed rows, remove the settled
-    // position rows, and persist the compounded budget. Guard the hydrate too.
-    if (bankedOut.length > 0) {
-      editedRef.current = true
-      void insertClosedTradesRemote(bankedOut)
-      void deleteTradesRemote(bankedOut.map((t) => t.id))
-      if (newBudget !== null) void saveBudgetRemote(newBudget)
-    }
-  }, [])
+  // ── Fills + exits are now SERVER-SIDE ──────────────────────────────────────
+  // The old browser-side fillPending / settleOpen (which walked daily bars and
+  // required a session strictly after placement) have been removed. A live
+  // engine now does this: the `settle-positions` Edge Function runs on a cron
+  // every minute during market hours, fills pending limits at the limit price
+  // when live Finnhub price crosses it, and settles open positions at their
+  // stop/target level — writing entry/exit prices and real timestamps to
+  // Supabase whether or not any browser is open. The client just reads those
+  // results (via hydrate + Realtime). Manual early close (the × button) stays
+  // client-side below, since it's a direct user action.
 
   /**
    * Close a position. If it was OPEN (filled), bank a ClosedTrade with realized
@@ -921,8 +756,6 @@ export function useBacktestPortfolio() {
     closed,
     setBudget,
     openTrade,
-    fillPending,
-    settleOpen,
     closePosition,
     resetPortfolio,
     /** Max concurrent positions (open + pending). */

@@ -375,7 +375,10 @@ function CandleChart({ bars, timeframe, width, explosiveGrades, freshDates, zone
     if (!svg) return
     const rect = svg.getBoundingClientRect()
     const vbX = ((clientX - rect.left) / rect.width) * chartW
-    const idx = Math.floor((vbX - PAD_L) / step)
+    // Round to the NEAREST lane center (candles are drawn at i*step + step/2),
+    // not floor into a lane — floor caused an off-by-one where a tap on a
+    // candle selected the one to its left.
+    const idx = Math.round((vbX - PAD_L - step / 2) / step)
     setHoveredIdx(idx >= 0 && idx < n ? idx : null)
   }, [n, step, chartW])
 

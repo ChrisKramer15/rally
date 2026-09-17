@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { changePct, LIVE_QUOTE_CAP } from './data/stocks'
 import { loadCached } from './data/dailyCache'
 import { useLiveQuotes } from './hooks/useLiveQuotes'
 import { overlayLiveQuotes } from './data/liveQuoteOverlay'
 import { formatEasternTime } from './data/marketCalendar'
-import type { DailyBar } from './data/tiingo'
 import { detectBasesForBars, selectSignalZone, type ZoneGrade, type ZoneKind } from './hooks/useBasingZones'
 import { gradeExplosiveAt, type ExplosiveGrade } from './hooks/useExplosiveMoves'
 import { useIndexMarket } from './hooks/useIndexMarket'
@@ -174,44 +173,9 @@ function App() {
     setView('backtest')
   }
 
-  // Pending-order watcher: on each feed refresh, test each resting limit order
-  // against its symbol's latest daily bar low/high, so a fill triggers when the
-  // session traded *through* the proximal line (intraday touch), not only when
-  // the close crossed it. The latest bar comes from the local daily-bar cache;
-  // if a symbol isn't cached we fall back to its live price as a flat range.
-  // On each feed refresh, test resting orders against each symbol's latest daily
-  // bar low/high, so both PENDING limit entries and OPEN positions' target/stop
-  // fire on an intraday touch (traded *through* the level), not just the close:
-  //   • fillPending — opens a pending limit when the proximal line is hit
-  //   • settleOpen  — closes an open position at its cash-out (target) or stop,
-  //                   booking realized P/L at that level like an auto-set order
-  // The latest bar comes from the local daily-bar cache; if a symbol isn't
-  // cached we fall back to its live price as a zero-width range.
-  const { fillPending, settleOpen } = portfolio
-  const orderSymbols = useMemo(
-    () =>
-      portfolio.positions
-        .filter((p) => p.status === 'pending' || p.status === 'open')
-        .map((p) => p.symbol),
-    [portfolio.positions],
-  )
-  useEffect(() => {
-    if (orderSymbols.length === 0) return
-    const cached = loadCached(orderSymbols)
-    // Pass each symbol's FULL cached bar history (ascending by date). fillPending
-    // and settleOpen walk forward from each order's moment-in-time anchor, so a
-    // resting limit fills only on a session AFTER it was placed, and its exit
-    // settles only on a session after the fill bar — no instant round-trips.
-    const barsBySymbol = new Map<string, DailyBar[]>()
-    for (const sym of orderSymbols) {
-      const bars = cached[sym]?.bars
-      if (bars && bars.length > 0) barsBySymbol.set(sym, bars)
-    }
-    // Fill entries first (a limit may fill on one session, then its target/stop
-    // can settle on a later one), then settle any open positions' target/stop.
-    fillPending(barsBySymbol)
-    settleOpen(barsBySymbol)
-  }, [stocks, orderSymbols, fillPending, settleOpen])
+  // Fills + exits are handled SERVER-SIDE now (the settle-positions Edge
+  // Function on a cron, using live Finnhub quotes). The browser no longer walks
+  // daily bars to fill/settle — it just reads the results (hydrate + Realtime).
 
   // Total account value (cash + market value of open positions) — the base the
   // trade ticket sizes its 1%-risk default against, so a stop-out costs ≤1% of

@@ -246,6 +246,9 @@ interface LevelCandleChartProps {
 function LevelCandleChart({ bars, width, levels, livePrice }: LevelCandleChartProps) {
   const n = bars.length
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null)
+  // Touch scrub mode: entered on long-press so a normal horizontal drag still
+  // scrolls history. While scrubbing, we swallow the scroll and move the crosshair.
+  const [scrubbing, setScrubbing] = useState(false)
   const svgRef = useRef<SVGSVGElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -266,12 +269,74 @@ function LevelCandleChart({ bars, width, levels, livePrice }: LevelCandleChartPr
     if (!svg) return
     const rect = svg.getBoundingClientRect()
     const vbX = ((clientX - rect.left) / rect.width) * chartW
-    const idx = Math.floor((vbX - PAD_L) / step)
+    // Candles are drawn centered in their lane (i*step + step/2), so map the
+    // pointer to the NEAREST lane center rather than flooring into a lane. Floor
+    // caused an off-by-one on touch: a tap on a candle's center sits at
+    // (i+0.5)*step, and tiny offsets rounded down to i-1. Rounding picks the
+    // candle the finger is actually over.
+    const idx = Math.round((vbX - PAD_L - step / 2) / step)
     setHoveredIdx(idx >= 0 && idx < n ? idx : null)
   }, [n, step, chartW])
 
   const mouseMoveHandler = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
     resolveIdxFromClientX(e.clientX)
+  }, [resolveIdxFromClientX])
+
+  // ── Touch interaction (mobile) — mirrors TickerDetailModal exactly ────────
+  // Two gestures, no conflict:
+  //   • plain horizontal drag → scrolls history (native, via touch-action:pan-x)
+  //   • long-press then drag  → scrubs the crosshair (preventDefault blocks the
+  //                             scroll while the finger is held)
+  // Native (non-passive) listeners are required because React's onTouchMove is
+  // passive and can't preventDefault to block the scroll.
+  useEffect(() => {
+    const svg = svgRef.current
+    if (!svg) return
+
+    let holdTimer: number | undefined
+    let active = false
+
+    const clearHold = () => {
+      if (holdTimer !== undefined) { window.clearTimeout(holdTimer); holdTimer = undefined }
+    }
+    const stop = () => {
+      clearHold()
+      active = false
+      setScrubbing(false)
+      setHoveredIdx(null)
+    }
+    const onStart = (e: TouchEvent) => {
+      const t = e.touches[0]
+      if (!t) return
+      const x = t.clientX
+      holdTimer = window.setTimeout(() => {
+        active = true
+        setScrubbing(true)
+        resolveIdxFromClientX(x)
+      }, 260)
+    }
+    const onMove = (e: TouchEvent) => {
+      const t = e.touches[0]
+      if (!t) return
+      if (active) {
+        e.preventDefault()
+        resolveIdxFromClientX(t.clientX)
+      } else {
+        clearHold()
+      }
+    }
+
+    svg.addEventListener('touchstart', onStart, { passive: true })
+    svg.addEventListener('touchmove', onMove, { passive: false })
+    svg.addEventListener('touchend', stop, { passive: true })
+    svg.addEventListener('touchcancel', stop, { passive: true })
+    return () => {
+      clearHold()
+      svg.removeEventListener('touchstart', onStart)
+      svg.removeEventListener('touchmove', onMove)
+      svg.removeEventListener('touchend', stop)
+      svg.removeEventListener('touchcancel', stop)
+    }
   }, [resolveIdxFromClientX])
 
   const geom = useMemo(() => {
@@ -336,7 +401,7 @@ function LevelCandleChart({ bars, width, levels, livePrice }: LevelCandleChartPr
           viewBox={`0 0 ${chartW} ${CHART_H}`}
           width={chartW}
           height={CHART_H}
-          className="td-candle-svg"
+          className={`td-candle-svg${scrubbing ? ' scrubbing' : ''}`}
           role="img"
           aria-label={`${bars.length}-day candlestick chart with trade levels`}
           onMouseMove={mouseMoveHandler}

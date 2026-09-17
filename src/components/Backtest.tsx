@@ -21,6 +21,22 @@ function placedLabel(position: BacktestPosition): string {
   return position.placedDate
 }
 
+/** The live fill moment in ET, or empty when not recorded (legacy fills). */
+function filledLabel(position: BacktestPosition): string {
+  if (position.filledAt) {
+    const d = new Date(position.filledAt)
+    if (!Number.isNaN(d.getTime())) return formatEasternDateTime(d)
+  }
+  return ''
+}
+
+/** Format a UTC ISO instant in ET, or empty when absent. */
+function instantLabel(iso?: string): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? '' : formatEasternDateTime(d)
+}
+
 type Portfolio = ReturnType<typeof useBacktestPortfolio>
 
 interface BacktestProps {
@@ -131,7 +147,10 @@ function OpenPositionRow({
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(position) } }}
         title={`View ${position.symbol} chart with trade levels`}
       >
-        <div className="bt-col-date">{position.openedDate ?? '—'}</div>
+        <div className="bt-col-date" title={position.filledAt ? `Filled ${filledLabel(position)}` : undefined}>
+          {position.openedDate ?? '—'}
+          {position.filledAt && <span className="bt-placed-time">{filledLabel(position)}</span>}
+        </div>
 
         <div className="bt-col-sym">
           <span className="bt-sym">
@@ -307,7 +326,10 @@ function ClosedTradeRow({ trade }: { trade: ClosedTrade }) {
   return (
     <li className="bt-row-wrap">
       <div className="bt-closed-row">
-        <div className="bt-col-date">{trade.closedDate}</div>
+        <div className="bt-col-date" title={trade.closedAt ? `Exited ${instantLabel(trade.closedAt)}` : undefined}>
+          {trade.closedDate}
+          {trade.closedAt && <span className="bt-placed-time">{instantLabel(trade.closedAt)}</span>}
+        </div>
         <div className="bt-col-sym">
           <span className="bt-sym">
             {trade.symbol}

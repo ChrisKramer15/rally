@@ -19,6 +19,42 @@ import { getSupabase } from './supabaseClient'
 import type { BacktestPosition, ClosedTrade } from '../hooks/useBacktestPortfolio'
 import type { AnyExplosiveGrade } from '../hooks/useExplosiveMoves'
 
+/**
+ * Subscribe to server-side changes on `trades` + `closed_trades` (Supabase
+ * Realtime). The settle-positions Edge Function fills/settles positions on a
+ * cron using the service role; those writes stream here so an open browser
+ * reflects a fill or exit the moment it happens — without waiting for a manual
+ * refresh. A short debounce coalesces the burst a single settle run can produce
+ * (upsert trades + insert closed + delete trades + budget update) into one
+ * callback. No-op (noop unsubscribe) when Supabase is off.
+ *
+ * @returns an unsubscribe function.
+ */
+export function subscribeToTradeUpdates(onChange: () => void): () => void {
+  const supabase = getSupabase()
+  if (!supabase) return () => {}
+
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const fire = () => {
+    if (timer !== null) return
+    timer = setTimeout(() => {
+      timer = null
+      onChange()
+    }, 800)
+  }
+
+  const channel = supabase
+    .channel('trades-changes')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'trades' }, fire)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'closed_trades' }, fire)
+    .subscribe()
+
+  return () => {
+    if (timer !== null) clearTimeout(timer)
+    void supabase.removeChannel(channel)
+  }
+}
+
 // ── Row shapes (snake_case columns as stored in Postgres) ───────────────────
 
 interface TradeRow {
@@ -31,6 +67,7 @@ interface TradeRow {
   placed_date: string
   placed_at: string | null
   opened_date: string | null
+  filled_at: string | null
   entry_price: number | string | null
   limit_price: number | string | null
   distal_price: number | string | null
@@ -58,6 +95,8 @@ interface ClosedTradeRow {
   realized_pnl: number | string
   opened_date: string | null
   closed_date: string
+  opened_at: string | null
+  closed_at: string | null
   zone_kind: 'demand' | 'supply' | null
   zone_grade: 'A+' | 'good' | 'weak' | null
   signal_strength: AnyExplosiveGrade | null
@@ -92,6 +131,7 @@ function rowToPosition(r: TradeRow): BacktestPosition {
     placedDate: r.placed_date,
     placedAt: r.placed_at ?? undefined,
     openedDate: r.opened_date,
+    filledAt: r.filled_at ?? undefined,
     entryPrice: num(r.entry_price) ?? null,
     limitPrice: num(r.limit_price),
     distalPrice: num(r.distal_price),
@@ -121,6 +161,8 @@ function rowToClosed(r: ClosedTradeRow): ClosedTrade {
     realizedPnl: num(r.realized_pnl) ?? 0,
     openedDate: r.opened_date,
     closedDate: r.closed_date,
+    openedAt: r.opened_at ?? undefined,
+    closedAt: r.closed_at ?? undefined,
     zoneKind: r.zone_kind ?? undefined,
     zoneGrade: r.zone_grade ?? undefined,
     signalStrength: r.signal_strength ?? undefined,
@@ -149,6 +191,7 @@ function positionToRow(p: BacktestPosition): TradeRow {
     placed_date: p.placedDate,
     placed_at: p.placedAt ?? null,
     opened_date: p.openedDate,
+    filled_at: p.filledAt ?? null,
     entry_price: p.entryPrice,
     limit_price: p.limitPrice ?? null,
     distal_price: p.distalPrice ?? null,
@@ -178,6 +221,8 @@ function closedToRow(t: ClosedTrade): ClosedTradeRow {
     realized_pnl: t.realizedPnl,
     opened_date: t.openedDate,
     closed_date: t.closedDate,
+    opened_at: t.openedAt ?? null,
+    closed_at: t.closedAt ?? null,
     zone_kind: t.zoneKind ?? null,
     zone_grade: t.zoneGrade ?? null,
     signal_strength: t.signalStrength ?? null,

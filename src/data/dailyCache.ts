@@ -26,11 +26,7 @@ import type { DailyBar } from './tiingo'
 /** Max daily bars retained per symbol. ~1 trading year covers sparklines + 20/50-day indicators. */
 export const MAX_BARS = 260
 
-// v2: bumped when the freshness-stamping rule changed (stamp the MIN of the
-// clock day and the newest bar's real date). v1 entries could be stamped "fresh
-// for today" while holding the prior session's last bar; discarding them forces
-// a clean re-read under the corrected rule.
-const CACHE_KEY = 'rally.dailyCache.v2'
+const CACHE_KEY = 'rally.dailyCache.v1'
 
 /** Per-symbol cache entry: the bars plus the trading day they were confirmed for. */
 export interface CachedSymbol {
