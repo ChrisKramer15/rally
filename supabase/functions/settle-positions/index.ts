@@ -86,6 +86,7 @@ interface TradeRow {
   placed_at: string | null
   opened_date: string | null
   filled_at: string | null
+  first_evaluated_at: string | null
   entry_price: number | string | null
   limit_price: number | string | null
   distal_price: number | string | null
@@ -358,6 +359,7 @@ Deno.serve(async (req) => {
   let realizedTotal = 0
   let filled = 0
   let settled = 0
+  let invalidated = 0
 
   for (const r of rows) {
     const live = priceBySymbol.get(r.symbol.toUpperCase())
@@ -371,14 +373,80 @@ Deno.serve(async (req) => {
     // FILL: pending limit whose limit was crossed → open at the limit price.
     if (status === 'pending' && r.order_type === 'limit') {
       const limit = num(r.limit_price)
-      if (shouldFill({ side: r.side, limitPrice: limit, livePrice: live })) {
+      const wouldFill = shouldFill({ side: r.side, limitPrice: limit, livePrice: live })
+
+      // FIRST-EVALUATION GUARD. A limit is meant to fill on a PULLBACK to your
+      // price. If the very first live quote the settler ever sees for this order
+      // already satisfies the fill, price was already on the wrong side when it
+      // was placed — the pullback already happened (a stale/used-up signal). We
+      // do NOT fill it (that would fill at the limit and often stop out on the
+      // same quote — the "instantly filled and closed" bug). Instead we bank it
+      // as an INVALIDATED $0 trade: it never really opened, so there's no loss,
+      // and the history shows "didn't take, price already gone."
+      //
+      // `first_evaluated_at` is the durable "this order has rested through a run
+      // without filling" marker. It's null on the first run that evaluates the
+      // order and set thereafter, so a fill is only honored once it's non-null.
+      const isFirstEval = r.first_evaluated_at == null
+
+      if (wouldFill && isFirstEval) {
+        // Invalidate: bank a $0 closed trade (reason 'invalidated') and remove
+        // the pending row. Reuses the settle bank-and-delete path below — a $0
+        // realized_pnl leaves the budget untouched.
+        invalidated++
+        closedRows.push({
+          id: r.id,
+          symbol: r.symbol,
+          name: r.name,
+          side: r.side,
+          shares: r.shares,
+          // Never opened: entry == exit == the limit it would have filled at, so
+          // realized P/L is exactly 0 no matter how the UI recomputes it.
+          entry_price: limit,
+          exit_price: limit,
+          realized_pnl: 0,
+          opened_date: null,
+          closed_date: todayEt,
+          opened_at: null,
+          closed_at: nowIso,
+          exit_reason: 'invalidated',
+          zone_kind: r.zone_kind,
+          zone_grade: r.zone_grade,
+          signal_strength: r.signal_strength,
+          proximal_price: r.proximal_price,
+          signal_date: r.signal_date,
+          order_type: r.order_type,
+          limit_price: r.limit_price,
+          distal_price: r.distal_price,
+          stop_loss_price: r.stop_loss_price,
+          cash_out_price: r.cash_out_price,
+          placed_date: r.placed_date,
+          placed_at: r.placed_at,
+        })
+        closedIds.push(r.id)
+        continue // banked as invalidated; never opened
+      }
+
+      if (wouldFill) {
+        // Rested through at least one prior run (first_evaluated_at set), and now
+        // the limit is crossed → a REAL fill.
         status = 'open'
         entry = limit
         filledAt = nowIso
         openedDate = todayEt
         filled++
       } else {
-        continue // still resting; nothing to write
+        // Still resting and not filling. If this was its first evaluation, stamp
+        // the marker so a future crossing counts as a real fill (and a crossing
+        // THIS run on a later re-place can't masquerade as a rested fill).
+        if (isFirstEval) {
+          toUpdateTrades.push({
+            id: r.id,
+            first_evaluated_at: nowIso,
+            updated_at: nowIso,
+          })
+        }
+        continue // nothing else to write
       }
     }
 
@@ -408,6 +476,7 @@ Deno.serve(async (req) => {
           closed_date: todayEt,
           opened_at: filledAt,
           closed_at: nowIso,
+          exit_reason: exit.reason,
           zone_kind: r.zone_kind,
           zone_grade: r.zone_grade,
           signal_strength: r.signal_strength,
@@ -523,6 +592,7 @@ Deno.serve(async (req) => {
     errorMap,
     filled,
     settled,
+    invalidated,
     realizedTotal,
   }
 
@@ -530,5 +600,5 @@ Deno.serve(async (req) => {
     return await finish('failure', detail, writeErrors.join(' · '))
   }
   const status = quoteErrors > 0 && priceBySymbol.size === 0 ? 'failure' : quoteErrors > 0 ? 'partial' : 'success'
-  return await finish(status, detail, `filled ${filled}, settled ${settled}`)
+  return await finish(status, detail, `filled ${filled}, settled ${settled}, invalidated ${invalidated}`)
 })

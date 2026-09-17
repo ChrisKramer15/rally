@@ -199,6 +199,14 @@ export interface ClosedTrade {
   /** UTC ISO instant the position was exited/closed. Null for legacy trades. */
   closedAt?: string
   /**
+   * Why the trade closed: 'stop' | 'target' | 'invalidated'. 'invalidated' means
+   * a pending limit that would have filled on its FIRST settler evaluation —
+   * price had already traded through the zone when it was placed — so it was
+   * never opened (realizedPnl 0), not a real stop-out. Undefined for trades
+   * banked before this was tracked.
+   */
+  exitReason?: 'stop' | 'target' | 'invalidated'
+  /**
    * ── Signal provenance (carried over from the position at close) ──────────
    * Mirrors the same fields on BacktestPosition so a reviewer can correlate
    * outcomes with the signal a trade came from. All nullable: trades closed

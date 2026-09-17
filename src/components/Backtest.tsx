@@ -320,6 +320,11 @@ function PendingOrderRow({
 function ClosedTradeRow({ trade }: { trade: ClosedTrade }) {
   const [expanded, setExpanded] = useState(false)
   const detail = closedToDetail(trade)
+  // An invalidated trade never opened — a pending limit that would have filled on
+  // its first settler evaluation (price had already traded through the zone). It
+  // has $0 P/L, so render it as a neutral "Invalidated" outcome rather than a
+  // misleading break-even win/loss.
+  const invalidated = trade.exitReason === 'invalidated'
   const up = trade.realizedPnl >= 0
   const cost = trade.entryPrice * trade.shares
   const pct = cost > 0 ? (trade.realizedPnl / cost) * 100 : 0
@@ -336,6 +341,14 @@ function ClosedTradeRow({ trade }: { trade: ClosedTrade }) {
             <span className={`bt-side-badge ${trade.side === 'short' ? 'bt-side-short' : 'bt-side-long'}`}>
               {trade.side === 'short' ? 'SHORT' : 'LONG'}
             </span>
+            {invalidated && (
+              <span
+                className="bt-side-badge bt-invalidated-badge"
+                title="Invalidated: this limit would have filled on its first evaluation — price had already traded through the zone — so it was never opened. No P/L."
+              >
+                INVALIDATED
+              </span>
+            )}
           </span>
           <span className="bt-shares">{trade.shares} sh · {formatDetailRR(detail)}</span>
           <SignalBadges
@@ -348,15 +361,21 @@ function ClosedTradeRow({ trade }: { trade: ClosedTrade }) {
           <span className="bt-sub">${formatCurrency(trade.entryPrice)}</span>
         </div>
         <div className="bt-col-num" data-label="Exit">
-          <span className="bt-sub">${formatCurrency(trade.exitPrice)}</span>
+          <span className="bt-sub">{invalidated ? '—' : `$${formatCurrency(trade.exitPrice)}`}</span>
         </div>
         <div className="bt-col-num" data-label="Realized">
-          <span className={`bt-cost ${up ? 'up' : 'down'}`}>
-            {up ? '+' : ''}${formatCurrency(trade.realizedPnl)}
-          </span>
-          <span className={`bt-sub ${up ? 'up' : 'down'}`}>
-            {up ? '+' : ''}{pct.toFixed(2)}%
-          </span>
+          {invalidated ? (
+            <span className="bt-cost bt-invalidated-note">Invalidated</span>
+          ) : (
+            <>
+              <span className={`bt-cost ${up ? 'up' : 'down'}`}>
+                {up ? '+' : ''}${formatCurrency(trade.realizedPnl)}
+              </span>
+              <span className={`bt-sub ${up ? 'up' : 'down'}`}>
+                {up ? '+' : ''}{pct.toFixed(2)}%
+              </span>
+            </>
+          )}
         </div>
         <div className="bt-col-action">
           <button

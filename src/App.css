@@ -3511,6 +3511,17 @@
   background: rgba(255, 77, 109, 0.12);
   border: 1px solid rgba(255, 77, 109, 0.3);
 }
+/* Invalidated: a pending limit that would have filled on its first evaluation —
+   never opened, $0 P/L. Neutral amber so it reads as "no trade", not win/loss. */
+.bt-invalidated-badge {
+  color: var(--neon-orange, #ffb547);
+  background: rgba(255, 181, 71, 0.12);
+  border: 1px solid rgba(255, 181, 71, 0.35);
+}
+.bt-invalidated-note {
+  color: var(--muted);
+  font-style: italic;
+}
 
 /* ---------- Backtest: signal provenance badges ---------- */
 /* The zone/signal a trade was placed from: direction (demand/supply), base

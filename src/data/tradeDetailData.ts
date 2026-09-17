@@ -38,6 +38,8 @@ export interface TradeDetailData {
   openedAt?: string
   /** UTC ISO instant the position was exited/closed (closed trades). */
   closedAt?: string
+  /** Why a closed trade ended: 'stop' | 'target' | 'invalidated'. */
+  exitReason?: 'stop' | 'target' | 'invalidated'
 }
 
 /** Map a live position (pending or active) into the normalized detail shape. */
@@ -84,6 +86,7 @@ export function closedToDetail(t: ClosedTrade): TradeDetailData {
     closedDate: t.closedDate,
     openedAt: t.openedAt,
     closedAt: t.closedAt,
+    exitReason: t.exitReason,
   }
 }
 
@@ -170,6 +173,28 @@ export function tradeLifecycle(d: TradeDetailData): TradeLifecycleEvent[] {
     })
   }
 
+  // Invalidated: the pending limit would have filled on its first settler
+  // evaluation (price had already traded through the zone), so it never opened.
+  // Show a single terminal "Invalidated" milestone instead of Filled → Closed.
+  if (d.exitReason === 'invalidated') {
+    const invalidWhen = instantEt(d.closedAt) ?? d.closedDate ?? null
+    events.push({
+      label: 'Filled',
+      when: '—',
+      price: null,
+      note: 'never filled — invalidated',
+      reached: false,
+    })
+    events.push({
+      label: 'Invalidated',
+      when: invalidWhen ?? '—',
+      price: d.limitPrice ?? d.proximalPrice ?? null,
+      note: 'price had already traded through the zone on first evaluation',
+      reached: true,
+    })
+    return events
+  }
+
   // 3) Filled (pending → open). filledAt on a live position, openedAt on a
   //    closed one; fall back to the entry date when only the date is known.
   const filledWhen = instantEt(d.filledAt) ?? instantEt(d.openedAt) ?? d.openedDate ?? null
@@ -189,7 +214,7 @@ export function tradeLifecycle(d: TradeDetailData): TradeLifecycleEvent[] {
       label: 'Closed',
       when: closedWhen ?? '—',
       price: d.exitPrice ?? null,
-      note: 'exited at stop / target',
+      note: d.exitReason === 'stop' ? 'exited at stop' : d.exitReason === 'target' ? 'exited at target' : 'exited at stop / target',
       reached: true,
     })
   } else {

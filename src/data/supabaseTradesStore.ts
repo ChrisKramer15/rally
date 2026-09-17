@@ -97,6 +97,7 @@ interface ClosedTradeRow {
   closed_date: string
   opened_at: string | null
   closed_at: string | null
+  exit_reason: 'stop' | 'target' | 'invalidated' | null
   zone_kind: 'demand' | 'supply' | null
   zone_grade: 'A+' | 'good' | 'weak' | null
   signal_strength: AnyExplosiveGrade | null
@@ -163,6 +164,7 @@ function rowToClosed(r: ClosedTradeRow): ClosedTrade {
     closedDate: r.closed_date,
     openedAt: r.opened_at ?? undefined,
     closedAt: r.closed_at ?? undefined,
+    exitReason: r.exit_reason ?? undefined,
     zoneKind: r.zone_kind ?? undefined,
     zoneGrade: r.zone_grade ?? undefined,
     signalStrength: r.signal_strength ?? undefined,
@@ -223,6 +225,7 @@ function closedToRow(t: ClosedTrade): ClosedTradeRow {
     closed_date: t.closedDate,
     opened_at: t.openedAt ?? null,
     closed_at: t.closedAt ?? null,
+    exit_reason: t.exitReason ?? null,
     zone_kind: t.zoneKind ?? null,
     zone_grade: t.zoneGrade ?? null,
     signal_strength: t.signalStrength ?? null,
