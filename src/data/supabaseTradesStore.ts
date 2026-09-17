@@ -341,12 +341,12 @@ export interface FriendlyWriteError {
 /** Map a raw TradeWriteError to friendly banner copy by its Postgres code. */
 export function friendlyWriteError(error: TradeWriteError): FriendlyWriteError {
   switch (error.code) {
-    // 23514 check_violation — the position-cap trigger (migration 0023).
+    // 23514 check_violation — the position-cap trigger (migrations 0023/0026).
     case '23514':
       return {
         title: 'Position limit reached.',
         detail:
-          'You’re at the maximum of 25 active positions. Cancel or close one before placing another order.',
+          'You’re at the maximum of 45 active positions. Cancel or close one before placing another order.',
         rejected: true,
       }
     // 23505 unique_violation — the one-active-position-per-symbol index (0023).

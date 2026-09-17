@@ -17,8 +17,18 @@ const PAD_B = 8
 const PAD_L = 0
 const PAD_R = 64
 const MIN_STEP = 12
-/** How many trailing daily bars to load into the chart. */
-const RANGE_BARS = 130
+
+/**
+ * Selectable trailing-bar windows for the chart. Approximate trading-day counts
+ * per calendar span (matches TickerDetailModal's daily ranges). Defaults to the
+ * smallest (1M) so the most recent action fills the view.
+ */
+const RANGE_OPTIONS = [
+  { label: '1M', bars: 22 },
+  { label: '3M', bars: 65 },
+  { label: '6M', bars: 130 },
+  { label: '1Y', bars: 260 },
+] as const
 
 /**
  * A managed price level to draw as a horizontal line across the chart.
@@ -67,6 +77,7 @@ export function TradeDetailModal({ position, livePrice, onClose }: TradeDetailMo
   const [bars, setBars] = useState<DailyBar[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [rangeIdx, setRangeIdx] = useState(0)
   const overlayRef = useRef<HTMLDivElement>(null)
   const chartWrapRef = useRef<HTMLDivElement>(null)
   const chartWidth = useElementWidth(chartWrapRef, 720)
@@ -134,7 +145,10 @@ export function TradeDetailModal({ position, livePrice, onClose }: TradeDetailMo
     return `${(reward / risk).toFixed(1)}:1`
   }, [entryPrice, position.stopLossPrice, position.cashOutPrice])
 
-  const chartBars = useMemo(() => bars.slice(-RANGE_BARS), [bars])
+  const chartBars = useMemo(
+    () => bars.slice(-RANGE_OPTIONS[rangeIdx].bars),
+    [bars, rangeIdx],
+  )
 
   return (
     <div
@@ -205,6 +219,20 @@ export function TradeDetailModal({ position, livePrice, onClose }: TradeDetailMo
             {position.shares} sh{rrLabel ? ` · ${rrLabel} R` : ''} · {position.orderType}
             {position.signalDate ? ` · signal ${position.signalDate}` : ''}
           </span>
+        </div>
+
+        {/* ── Range controls ── */}
+        <div className="td-range-bar" role="group" aria-label="Chart range">
+          {RANGE_OPTIONS.map((r, i) => (
+            <button
+              key={r.label}
+              className={`td-range-btn ${rangeIdx === i ? 'active' : ''}`}
+              onClick={() => setRangeIdx(i)}
+              aria-pressed={rangeIdx === i}
+            >
+              {r.label}
+            </button>
+          ))}
         </div>
 
         {/* ── Chart ── */}

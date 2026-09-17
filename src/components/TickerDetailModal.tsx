@@ -108,7 +108,7 @@ export function TickerDetailModal({ stock, onClose, explosiveGrades, freshDates,
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [timeframe, setTimeframe] = useState<Timeframe>('D')
-  const [rangeIdx, setRangeIdx] = useState(1)
+  const [rangeIdx, setRangeIdx] = useState(0)
   const [selectedBar, setSelectedBar] = useState<DailyBar | null>(null)
   const [showZones, setShowZones] = useState(true)
   const [showExplosive, setShowExplosive] = useState(true)
@@ -173,7 +173,7 @@ export function TickerDetailModal({ stock, onClose, explosiveGrades, freshDates,
   const positive = pct >= 0
 
   const handleTimeframeChange = (tf: Timeframe) => {
-    setTimeframe(tf); setRangeIdx(1); setSelectedBar(null)
+    setTimeframe(tf); setRangeIdx(0); setSelectedBar(null)
   }
   const handleSelectBar = useCallback((bar: DailyBar) => {
     setSelectedBar((prev) => prev?.date === bar.date ? null : bar)
