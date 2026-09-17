@@ -321,6 +321,65 @@ export interface TradeWriteError {
   at: number
 }
 
+/**
+ * User-facing copy for a write failure. Some failures are INTENTIONAL rejections
+ * by the DB guards (position cap, one-position-per-symbol) rather than a flaky
+ * write, so they get their own reassuring wording — nothing was lost, the order
+ * was simply declined. Anything unmapped falls back to the generic "didn't save"
+ * framing plus the raw Postgres message for diagnosis.
+ */
+export interface FriendlyWriteError {
+  /** Short bold headline for the banner. */
+  title: string
+  /** One-sentence human explanation. */
+  detail: string
+  /** True when the write was deliberately rejected (not a transient failure), so
+   *  the banner can drop the alarming "will disappear on refresh" line. */
+  rejected: boolean
+}
+
+/** Map a raw TradeWriteError to friendly banner copy by its Postgres code. */
+export function friendlyWriteError(error: TradeWriteError): FriendlyWriteError {
+  switch (error.code) {
+    // 23514 check_violation — the position-cap trigger (migration 0023).
+    case '23514':
+      return {
+        title: 'Position limit reached.',
+        detail:
+          'You’re at the maximum of 25 active positions. Cancel or close one before placing another order.',
+        rejected: true,
+      }
+    // 23505 unique_violation — the one-active-position-per-symbol index (0023).
+    case '23505':
+      return {
+        title: 'Already holding this ticker.',
+        detail:
+          'You already have an active position for this symbol. A ticker can only hold one open or pending order at a time.',
+        rejected: true,
+      }
+    // NO_CLIENT — Supabase env vars missing.
+    case 'NO_CLIENT':
+      return {
+        title: 'Not connected.',
+        detail: 'The app isn’t connected to the trade database, so this change can’t be saved.',
+        rejected: false,
+      }
+    // NO_ROWS_DELETED — a delete matched nothing (already gone or protected).
+    case 'NO_ROWS_DELETED':
+      return {
+        title: 'Nothing to remove.',
+        detail: 'That position was already gone on the server — it may have filled or been cancelled elsewhere.',
+        rejected: true,
+      }
+    default:
+      return {
+        title: 'Trade didn’t save.',
+        detail: error.message,
+        rejected: false,
+      }
+  }
+}
+
 type WriteErrorListener = (error: TradeWriteError) => void
 
 // Simple pub/sub so the UI can show a banner when a durable write fails. The

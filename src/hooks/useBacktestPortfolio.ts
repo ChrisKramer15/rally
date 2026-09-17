@@ -414,6 +414,21 @@ export interface OpenTradeInput {
 export function useBacktestPortfolio() {
   const [{ budget, positions, closed }, setState] = useState<PersistShape>(loadState)
 
+  // Always-current snapshot of state, so event handlers can make their
+  // Supabase-sync decision (which row to delete, what to bank) SYNCHRONOUSLY
+  // without relying on values assigned inside a setState updater. React runs
+  // setState updaters asynchronously (and twice under StrictMode), so reading a
+  // variable set inside the updater right after calling setState sees the OLD
+  // value — that's why closePosition's DELETE never fired and cancelled trades
+  // came back on refresh. Deciding from this ref keeps the updater pure.
+  const stateRef = useRef<PersistShape>({ budget, positions, closed })
+  // Keep the ref in sync AFTER each commit (never during render — writing a ref
+  // in render is a React anti-pattern). Event handlers fire after commit, so the
+  // ref is always current by the time closePosition reads it.
+  useEffect(() => {
+    stateRef.current = { budget, positions, closed }
+  }, [budget, positions, closed])
+
   // Guards the initial Supabase hydrate from clobbering a fresh local edit the
   // user made before the async read returned (mirrors useWatchlist).
   const editedRef = useRef(false)
@@ -652,43 +667,46 @@ export function useBacktestPortfolio() {
     // Invalid input (bad price/limit) — nothing to place.
     if (!candidate) return ''
 
-    // Decide dup-ness against the CURRENT positions once, before setState, so
-    // the answer can't be corrupted by a double-invoked updater. `created` is
-    // what we actually appended (null when a same-symbol position already
-    // exists), captured for the Supabase insert below.
-    let resultId = candidate.id
-    let created: BacktestPosition | null = candidate
-    setState((s) => {
-      const existing = s.positions.find((p) => p.symbol === input.symbol)
-      if (existing) {
-        // A position for this symbol already exists — leave it untouched.
-        resultId = existing.id
-        created = null
-        return s
-      }
-      // Enforce the concurrent-position ceiling (open + pending combined). At
-      // the cap, refuse to add — the UI disables submit + explains why, so this
-      // is a defensive backstop rather than the primary gate.
-      if (s.positions.length >= MAX_POSITIONS) {
-        resultId = ''
-        created = null
-        return s
-      }
-      editedRef.current = true
-      // Pure append: same input state → same output, safe to run twice.
-      return { ...s, positions: [candidate as BacktestPosition, ...s.positions] }
+    // Decide dup-ness and the cap SYNCHRONOUSLY from the current-state ref —
+    // never inside the setState updater. React runs the updater async (and twice
+    // under StrictMode), so a decision assigned inside it is unreadable by the
+    // Supabase-sync code that runs right after setState. `created` is what we
+    // actually append (null when a same-symbol position exists or we're at the
+    // cap); `resultId` is what we return to the caller.
+    const s = stateRef.current
+    const existing = s.positions.find((p) => p.symbol === input.symbol)
+    if (existing) {
+      // A position for this symbol already exists — leave it untouched.
+      return existing.id
+    }
+    // Enforce the concurrent-position ceiling (open + pending combined). At the
+    // cap, refuse to add — the UI disables submit + explains why, and the DB
+    // trigger is the durable backstop. This is the client-side gate.
+    if (s.positions.length >= MAX_POSITIONS) {
+      return ''
+    }
+
+    const created: BacktestPosition = candidate
+    const resultId = created.id
+    editedRef.current = true
+    // Pure append that recomputes from prev, safe under StrictMode double-invoke.
+    setState((prev) => {
+      // Guard against a same-symbol row a concurrent update may have added
+      // between our ref read and this commit — keeps the append idempotent.
+      if (prev.positions.some((p) => p.id === created.id || p.symbol === input.symbol)) return prev
+      return { ...prev, positions: [created, ...prev.positions] }
     })
 
-    // Persist the new position to Supabase. Only when one was actually appended
-    // — a dup symbol is a no-op. This is NOT fire-and-forget: if the durable
-    // insert fails (network flake, schema-cache mismatch, RLS rejection), the
-    // row only ever lived in local state, so the next successful hydrate — which
-    // adopts the server's rows wholesale — would silently drop it. That's the
-    // "placed a pending trade, then it disappeared" bug. On failure we roll the
+    // Persist the new position to Supabase. This is NOT fire-and-forget: if the
+    // durable insert fails (network flake, schema-cache mismatch, RLS/trigger
+    // rejection — e.g. the position-cap or unique-symbol guards), the row only
+    // ever lived in local state, so the next successful hydrate — which adopts
+    // the server's rows wholesale — would silently drop it. That's the "placed a
+    // pending trade, then it disappeared" bug. On failure we roll the
     // un-persisted position back out of local state so the UI matches reality
     // (the write-error banner already surfaces WHY it didn't save), rather than
     // showing a phantom order that vanishes on refresh.
-    if (created) {
+    {
       const placed = created
       void insertTradeRemote(placed).then((ok) => {
         if (ok) return
@@ -719,37 +737,41 @@ export function useBacktestPortfolio() {
    * cancellation — it's simply removed, with no realized P/L.
    */
   const closePosition = useCallback((id: string, exitPrice?: number) => {
-    // Captured for the Supabase sync after setState.
-    let removedId: string | null = null
+    // Decide EVERYTHING here, from the current-state ref — NOT inside the
+    // setState updater. The updater runs async (and twice in StrictMode), so any
+    // value assigned inside it is still unset when the post-setState code runs;
+    // that's the bug that skipped the DELETE and made cancelled trades reappear
+    // on refresh. Reading stateRef.current keeps this synchronous and correct.
+    const s = stateRef.current
+    const pos = s.positions.find((p) => p.id === id)
+    if (!pos) return // nothing to close (already gone)
+
+    editedRef.current = true
+
+    // Pending (unfilled) order, or no usable exit price -> cancel, don't bank.
+    const entry = pos.entryPrice
+    const isCancel =
+      pos.status !== 'open' || entry == null || exitPrice == null || !Number.isFinite(exitPrice)
+
     let bankedTrade: ClosedTrade | null = null
-    let newBudget: number | null = null
-    setState((s) => {
-      const pos = s.positions.find((p) => p.id === id)
-      if (!pos) return s
+    let nextBudget = s.budget
 
-      editedRef.current = true
-      removedId = id
-      const positions = s.positions.filter((p) => p.id !== id)
-
-      // Pending (unfilled) order, or no usable exit price -> cancel, don't bank.
-      const entry = pos.entryPrice
-      if (pos.status !== 'open' || entry == null || exitPrice == null || !Number.isFinite(exitPrice)) {
-        return { ...s, positions }
-      }
-
+    if (isCancel) {
+      setState((prev) => ({ ...prev, positions: prev.positions.filter((p) => p.id !== id) }))
+    } else {
       const realizedPnl =
         pos.side === 'short'
-          ? (entry - exitPrice) * pos.shares
-          : (exitPrice - entry) * pos.shares
+          ? ((entry as number) - (exitPrice as number)) * pos.shares
+          : ((exitPrice as number) - (entry as number)) * pos.shares
 
-      const trade: ClosedTrade = {
+      bankedTrade = {
         id: pos.id,
         symbol: pos.symbol,
         name: pos.name,
         side: pos.side,
         shares: pos.shares,
-        entryPrice: entry,
-        exitPrice,
+        entryPrice: entry as number,
+        exitPrice: exitPrice as number,
         realizedPnl,
         openedDate: pos.openedDate,
         closedDate: todayISO(),
@@ -762,23 +784,27 @@ export function useBacktestPortfolio() {
       }
       // Realized P/L compounds into the cash base (true-portfolio behavior):
       // a banked gain grows what you can deploy next, a loss shrinks it.
-      bankedTrade = trade
-      newBudget = s.budget + realizedPnl
-      return { ...s, budget: newBudget, positions, closed: [trade, ...s.closed] }
-    })
+      nextBudget = s.budget + realizedPnl
+      const banked = bankedTrade
+      setState((prev) => ({
+        ...prev,
+        budget: prev.budget + realizedPnl,
+        positions: prev.positions.filter((p) => p.id !== id),
+        closed: [banked, ...prev.closed],
+      }))
+    }
+
     // Sync to Supabase. Always remove the position row; if it was an open
     // position we also bank the closed trade and persist the new budget.
-    if (removedId) {
-      // Tombstone the id so any remote read that races the DELETE commit (our
-      // own delete triggers a realtime event that re-reads) can't resurrect the
-      // just-removed row. Cleared automatically once a remote read no longer
-      // contains it — see reconcilePendingDeletes.
-      pendingDeletesRef.current.add(removedId)
-      void deleteTradeRemote(removedId)
-      if (bankedTrade) {
-        void insertClosedTradeRemote(bankedTrade)
-        if (newBudget !== null) void saveBudgetRemote(newBudget)
-      }
+    // Tombstone the id so a remote read that races the DELETE commit (our own
+    // delete triggers a realtime event that re-reads) can't resurrect the just-
+    // removed row. Cleared once a remote read no longer contains it — see
+    // reconcilePendingDeletes.
+    pendingDeletesRef.current.add(id)
+    void deleteTradeRemote(id)
+    if (bankedTrade) {
+      void insertClosedTradeRemote(bankedTrade)
+      void saveBudgetRemote(nextBudget)
     }
   }, [])
 

@@ -19,6 +19,7 @@ import { DataPipeline } from './components/DataPipeline'
 import { ExplosiveMoves } from './components/ExplosiveMoves'
 import { Backtest } from './components/Backtest'
 import { useBacktestPortfolio, type TradeSide } from './hooks/useBacktestPortfolio'
+import { friendlyWriteError } from './data/supabaseTradesStore'
 import { atrFromBars, computePortfolioSummary } from './data/tradeMath'
 import './App.css'
 
@@ -203,24 +204,34 @@ function App() {
       {/* Persistence-failure banner: a trade did NOT save to Supabase. This
           replaces the old silent console.warn so the user (and we) can see the
           exact reason a trade vanishes on refresh — the `code` pinpoints it. */}
-      {portfolio.writeError && (
-        <div className="trade-persist-error" role="alert">
-          <div className="trade-persist-error__body">
-            <strong>Trade didn’t save.</strong> Your last change ({portfolio.writeError.op}) failed
-            to persist{portfolio.writeError.code ? ` (code ${portfolio.writeError.code})` : ''} and
-            will disappear on refresh.
-            <span className="trade-persist-error__detail">{portfolio.writeError.message}</span>
+      {portfolio.writeError && (() => {
+        // Friendly copy per error code. An INTENTIONAL rejection (position cap,
+        // duplicate ticker) reads as a normal "declined" notice — nothing was
+        // lost — while a genuine save failure keeps the alarming "will disappear
+        // on refresh" warning. The raw code stays visible for support/debugging.
+        const friendly = friendlyWriteError(portfolio.writeError)
+        return (
+          <div className="trade-persist-error" role="alert">
+            <div className="trade-persist-error__body">
+              <strong>{friendly.title}</strong> {friendly.detail}
+              {!friendly.rejected && ' This change did not persist and will disappear on refresh.'}
+              {portfolio.writeError.code && (
+                <span className="trade-persist-error__detail">
+                  {portfolio.writeError.op} · code {portfolio.writeError.code}
+                </span>
+              )}
+            </div>
+            <button
+              type="button"
+              className="trade-persist-error__dismiss"
+              onClick={portfolio.clearWriteError}
+              aria-label="Dismiss error"
+            >
+              ×
+            </button>
           </div>
-          <button
-            type="button"
-            className="trade-persist-error__dismiss"
-            onClick={portfolio.clearWriteError}
-            aria-label="Dismiss error"
-          >
-            ×
-          </button>
-        </div>
-      )}
+        )
+      })()}
       {/* Ticker tape — always alphabetized, independent of watchlist sort. */}
       <div className="ticker-tape">
         <div

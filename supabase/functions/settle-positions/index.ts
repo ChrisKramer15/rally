@@ -239,7 +239,7 @@ Deno.serve(async (req) => {
   const todayEt = easternISODate(startedAt)
 
   // ── 3) Fill pending limits + 4) settle open positions ─────────────────────
-  const toUpsertTrades: Record<string, unknown>[] = []
+  const toUpdateTrades: Record<string, unknown>[] = []
   const closedRows: Record<string, unknown>[] = []
   const closedIds: string[] = []
   let realizedTotal = 0
@@ -313,9 +313,14 @@ Deno.serve(async (req) => {
       }
 
       // Filled this run but not exiting yet — persist the pending→open flip.
+      // Only the changed columns, keyed by id: this is an UPDATE, not an upsert.
+      // `rows` is a snapshot read at the top of the run; if the user cancelled
+      // this pending order mid-run (deleting its trades row), an upsert would
+      // RESURRECT the deleted row from that stale snapshot. An update matches
+      // zero rows and is a harmless no-op instead.
       if (r.status === 'pending') {
-        toUpsertTrades.push({
-          ...r,
+        toUpdateTrades.push({
+          id: r.id,
           status: 'open',
           entry_price: entry,
           filled_at: filledAt,
@@ -329,22 +334,56 @@ Deno.serve(async (req) => {
   // ── 5) Persist changes ────────────────────────────────────────────────────
   const writeErrors: string[] = []
 
-  if (toUpsertTrades.length > 0) {
-    const { error } = await supabase.from('trades').upsert(toUpsertTrades, { onConflict: 'id' })
-    if (error) writeErrors.push(`upsert trades: ${error.message}`)
+  if (toUpdateTrades.length > 0) {
+    // Per-row UPDATE keyed by id (not a bulk upsert): a row cancelled by the
+    // user mid-run is simply not matched, so a fill can't recreate a deleted
+    // order. Counts are tiny (≤ MAX_SYMBOLS), so sequential updates are fine.
+    for (const upd of toUpdateTrades) {
+      const { id, ...changes } = upd as { id: string } & Record<string, unknown>
+      const { error } = await supabase.from('trades').update(changes).eq('id', id)
+      if (error) writeErrors.push(`update trade ${id}: ${error.message}`)
+    }
   }
 
   if (closedRows.length > 0) {
-    const { error: insErr } = await supabase.from('closed_trades').insert(closedRows)
-    if (insErr) {
-      writeErrors.push(`insert closed: ${insErr.message}`)
+    // `rows` is a stale snapshot read at the top of the run. A position the user
+    // cancelled mid-run is already gone, and we must NOT bank a closed trade (or
+    // count its P/L) for an order that no longer exists. Re-read which of the
+    // to-be-settled ids STILL exist, and only act on those.
+    const { data: liveRows, error: existErr } = await supabase
+      .from('trades')
+      .select('id')
+      .in('id', closedIds)
+    if (existErr) {
+      writeErrors.push(`recheck settled trades: ${existErr.message}`)
     } else {
-      // Only remove the open rows once the banked rows are safely inserted.
-      const { error: delErr } = await supabase.from('trades').delete().in('id', closedIds)
-      if (delErr) writeErrors.push(`delete settled trades: ${delErr.message}`)
+      const settledIds = new Set(((liveRows ?? []) as { id: string }[]).map((d) => d.id))
+      const rowsToBank = closedRows.filter((c) => settledIds.has(c.id as string))
+      const idsToDelete = closedIds.filter((id) => settledIds.has(id))
 
-      // Compound realized P/L into the single-row budget.
-      if (realizedTotal !== 0) {
+      // Insert the banked rows FIRST (durable), then delete the source rows —
+      // so a failed insert never leaves a position deleted-but-not-banked.
+      let banked = false
+      if (rowsToBank.length > 0) {
+        const { error: insErr } = await supabase.from('closed_trades').insert(rowsToBank)
+        if (insErr) {
+          writeErrors.push(`insert closed: ${insErr.message}`)
+        } else {
+          banked = true
+        }
+      }
+
+      if (banked && idsToDelete.length > 0) {
+        const { error: delErr } = await supabase.from('trades').delete().in('id', idsToDelete)
+        if (delErr) writeErrors.push(`delete settled trades: ${delErr.message}`)
+      }
+
+      // Compound realized P/L, but only over positions that actually settled
+      // (not ones cancelled out from under us mid-run).
+      const bankedPnl = banked
+        ? rowsToBank.reduce((sum, c) => sum + num(c.realized_pnl as number), 0)
+        : 0
+      if (bankedPnl !== 0) {
         const { data: pf, error: readErr } = await supabase
           .from('portfolio')
           .select('budget')
@@ -353,7 +392,7 @@ Deno.serve(async (req) => {
         if (readErr) {
           writeErrors.push(`read budget: ${readErr.message}`)
         } else {
-          const nextBudget = num((pf as { budget: number | string } | null)?.budget) + realizedTotal
+          const nextBudget = num((pf as { budget: number | string } | null)?.budget) + bankedPnl
           const { error: budErr } = await supabase
             .from('portfolio')
             .update({ budget: nextBudget, updated_at: nowIso })
