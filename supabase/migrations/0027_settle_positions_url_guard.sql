@@ -1,5 +1,11 @@
 -- ---------------------------------------------------------------------------
--- 0023_settle_positions_url_guard
+-- 0027_settle_positions_url_guard
+--
+-- (Renumbered from 0023 — it originally shared version 0023 with
+-- trades_position_limits, which broke `supabase db push`. Only one 0023 was
+-- ever recorded in schema_migrations, and this guard's SQL had never actually
+-- been applied to the remote DB. Renumbered to 0027 and applied so history and
+-- reality match.)
 --
 -- Harden invoke_settle_positions() so a MISCONFIGURED function URL fails LOUDLY
 -- and actionably instead of silently every minute.
