@@ -32,6 +32,12 @@ export interface TradeDetailData {
   placedAt?: string
   openedDate?: string | null
   closedDate?: string
+  /** UTC ISO instant the pending limit filled to open (live engine). */
+  filledAt?: string
+  /** UTC ISO instant the position was filled/opened (closed trades). */
+  openedAt?: string
+  /** UTC ISO instant the position was exited/closed (closed trades). */
+  closedAt?: string
 }
 
 /** Map a live position (pending or active) into the normalized detail shape. */
@@ -52,6 +58,7 @@ export function positionToDetail(p: BacktestPosition): TradeDetailData {
     placedDate: p.placedDate,
     placedAt: p.placedAt,
     openedDate: p.openedDate,
+    filledAt: p.filledAt,
   }
 }
 
@@ -75,6 +82,8 @@ export function closedToDetail(t: ClosedTrade): TradeDetailData {
     placedAt: t.placedAt,
     openedDate: t.openedDate,
     closedDate: t.closedDate,
+    openedAt: t.openedAt,
+    closedAt: t.closedAt,
   }
 }
 
@@ -100,4 +109,98 @@ export function placedMoment(d: TradeDetailData): string {
     if (!Number.isNaN(dt.getTime())) return formatEasternDateTime(dt)
   }
   return d.placedDate ?? '—'
+}
+
+/** Format a UTC ISO instant in ET, or null when absent/invalid. */
+function instantEt(iso?: string | null): string | null {
+  if (!iso) return null
+  const dt = new Date(iso)
+  return Number.isNaN(dt.getTime()) ? null : formatEasternDateTime(dt)
+}
+
+/** One event in a trade's lifecycle, in chronological order. */
+export interface TradeLifecycleEvent {
+  /** Milestone name, e.g. "Signal", "Limit placed", "Filled", "Closed". */
+  label: string
+  /** When it happened (date+time in ET when known, else the plain date). */
+  when: string
+  /** The relevant price at that milestone, or null when not applicable. */
+  price: number | null
+  /** A short clarifying note (e.g. the exit reason, the entry edge). */
+  note?: string
+  /** Whether this milestone actually happened yet (false = future/not reached). */
+  reached: boolean
+}
+
+/**
+ * Build the ordered transaction history for a trade: signal → limit placed →
+ * filled → closed, each with its timestamp AND the price at that point, plus the
+ * zone's proximal/distal edges as context. Pending/active trades show the
+ * milestones reached so far; a closed trade shows the full lifecycle.
+ *
+ * Prices per milestone:
+ *   • Signal   → the zone's proximal (entry edge) line — the signal's key level.
+ *   • Placed   → the resting limit price (for a limit order).
+ *   • Filled   → the actual entry (fill) price.
+ *   • Closed   → the actual exit price.
+ */
+export function tradeLifecycle(d: TradeDetailData): TradeLifecycleEvent[] {
+  const events: TradeLifecycleEvent[] = []
+
+  // 1) Signal created (date only — signals are a daily concept).
+  if (d.signalDate) {
+    events.push({
+      label: 'Signal',
+      when: d.signalDate,
+      price: d.proximalPrice ?? null,
+      note: 'explosive move · proximal entry edge',
+      reached: true,
+    })
+  }
+
+  // 2) Limit order placed.
+  const placedWhen = instantEt(d.placedAt) ?? d.placedDate ?? null
+  if (placedWhen) {
+    events.push({
+      label: d.orderType === 'market' ? 'Market order placed' : 'Limit placed',
+      when: placedWhen,
+      price: d.orderType === 'market' ? (d.entryPrice ?? null) : (d.limitPrice ?? null),
+      note: d.orderType === 'limit' ? 'resting at the limit price' : undefined,
+      reached: true,
+    })
+  }
+
+  // 3) Filled (pending → open). filledAt on a live position, openedAt on a
+  //    closed one; fall back to the entry date when only the date is known.
+  const filledWhen = instantEt(d.filledAt) ?? instantEt(d.openedAt) ?? d.openedDate ?? null
+  const isFilled = d.status !== 'pending' && (d.entryPrice != null || filledWhen != null)
+  events.push({
+    label: 'Filled',
+    when: filledWhen ?? '—',
+    price: d.entryPrice ?? null,
+    note: isFilled ? 'entered at fill price' : 'waiting for the limit',
+    reached: isFilled,
+  })
+
+  // 4) Closed (exit at stop/target or manual close).
+  if (d.status === 'closed') {
+    const closedWhen = instantEt(d.closedAt) ?? d.closedDate ?? null
+    events.push({
+      label: 'Closed',
+      when: closedWhen ?? '—',
+      price: d.exitPrice ?? null,
+      note: 'exited at stop / target',
+      reached: true,
+    })
+  } else {
+    events.push({
+      label: 'Closed',
+      when: '—',
+      price: null,
+      note: 'stop / target not yet hit',
+      reached: false,
+    })
+  }
+
+  return events
 }

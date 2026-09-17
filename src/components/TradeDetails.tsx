@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchDailyBarsFromSupabase } from '../data/supabaseDailyStore'
 import type { DailyBar } from '../data/tiingo'
 import { formatCurrency } from '../data/stocks'
-import { formatDetailRR, placedMoment, type TradeDetailData } from '../data/tradeDetailData'
+import { formatDetailRR, placedMoment, tradeLifecycle, type TradeDetailData } from '../data/tradeDetailData'
 
 // ── Chart geometry (mirrors TradeDetailModal's inline chart) ────────────────
 const CHART_H = 300
@@ -99,21 +99,39 @@ export function TradeDetails({ data }: { data: TradeDetailData }) {
   }, [data])
 
   const chartBars = useMemo(() => bars.slice(-RANGE_BARS), [bars])
+  const lifecycle = useMemo(() => tradeLifecycle(data), [data])
 
   return (
     <div className="td-inline">
-      {/* ── Data grid ── */}
+      {/* ── Lifecycle timeline: the full transaction history in order, each
+          milestone with its time + the price at that point. ── */}
+      <ol className="td-timeline" aria-label="Trade lifecycle">
+        {lifecycle.map((ev, i) => (
+          <li key={`${ev.label}-${i}`} className={`td-tl-event ${ev.reached ? '' : 'td-tl-pending'}`}>
+            <span className="td-tl-dot" aria-hidden="true" />
+            <div className="td-tl-body">
+              <div className="td-tl-head">
+                <span className="td-tl-label">{ev.label}</span>
+                <span className="td-tl-price">{money(ev.price)}</span>
+              </div>
+              <div className="td-tl-when">{ev.when}</div>
+              {ev.note && <div className="td-tl-note">{ev.note}</div>}
+            </div>
+          </li>
+        ))}
+      </ol>
+
+      {/* ── Data grid: the full level + price set behind the timeline. ── */}
       <dl className="td-facts">
         <Fact label="Explosive bar date" value={dateOrDash(data.signalDate)} />
-        <Fact label="Proximal price" value={money(data.proximalPrice)} />
+        <Fact label="Proximal (entry edge)" value={money(data.proximalPrice)} />
+        <Fact label="Distal (zone far edge)" value={money(data.distalPrice)} />
         <Fact label={isPending ? 'Stop-loss (potential)' : 'Stop-loss price'} value={money(data.stopLossPrice)} />
         <Fact label={isPending ? 'Cash-out (potential)' : 'Cash-out price'} value={money(data.cashOutPrice)} />
         <Fact label="Limit price (placed)" value={money(data.limitPrice)} />
         <Fact label="Actual entry price" value={money(data.entryPrice)} />
         <Fact label="Actual exit price" value={money(data.exitPrice)} />
         <Fact label="Order placed" value={placedMoment(data)} />
-        <Fact label="Entry date" value={dateOrDash(data.openedDate)} />
-        <Fact label="Exit date" value={dateOrDash(data.closedDate)} />
         <Fact label={isPending ? 'Reward : risk (potential)' : 'Reward : risk'} value={rr} highlight />
       </dl>
 

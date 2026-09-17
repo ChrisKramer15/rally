@@ -2957,6 +2957,91 @@
   border-top: 1px dashed rgba(120, 90, 255, 0.18);
 }
 
+/* ── Trade lifecycle timeline ── */
+.td-timeline {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+.td-tl-event {
+  position: relative;
+  padding-left: 16px;
+}
+.td-tl-dot {
+  position: absolute;
+  left: 0;
+  top: 4px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--neon-cyan);
+  box-shadow: 0 0 6px var(--neon-cyan);
+}
+.td-tl-pending .td-tl-dot {
+  background: transparent;
+  border: 1px solid var(--muted);
+  box-shadow: none;
+}
+.td-tl-pending {
+  opacity: 0.55;
+}
+.td-tl-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.td-tl-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-h);
+}
+.td-tl-price {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-h);
+}
+.td-tl-when {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--mono);
+  margin-top: 2px;
+}
+.td-tl-note {
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+@media (max-width: 760px) {
+  .td-timeline {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+  /* On mobile, render it as a true vertical timeline with a connecting spine. */
+  .td-tl-event {
+    padding-left: 18px;
+    padding-bottom: 12px;
+  }
+  .td-tl-event::before {
+    content: '';
+    position: absolute;
+    left: 4px;
+    top: 12px;
+    bottom: -2px;
+    width: 1px;
+    background: rgba(120, 90, 255, 0.25);
+  }
+  .td-tl-event:last-child::before {
+    display: none;
+  }
+}
+
 .td-facts {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
