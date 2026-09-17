@@ -1,46 +1,24 @@
 /**
- * Finnhub real-time quote client (browser-direct).
+ * Live-quote types.
  *
- * ROLE IN THE APP
- * ---------------
- * Tiingo (server-side, via the Supabase collector) remains the single source of
- * truth for DAILY bars and all signal generation. Finnhub is a SECOND, separate
- * provider used ONLY for near-real-time last prices from the trade screen
- * onward (trade ticket, backtest mark-to-market, portfolio valuation) and for a
- * pipeline health indicator. It never feeds signals and never replaces Tiingo.
+ * The browser NO LONGER calls Finnhub directly. Live prices are captured
+ * server-side by the settle-positions Edge Function (which quotes Finnhub for
+ * every pending/open position each minute) and written to the Supabase
+ * `intraday_quotes` table. The browser reads that table via
+ * `intradayQuotesStore` / `useLiveQuotes` — this frees the entire Finnhub
+ * free-tier budget for the settler and removes the old browser/server 429
+ * collisions.
  *
- * WHY BROWSER-DIRECT
- * ------------------
- * Finnhub's REST `/quote` endpoint is CORS-enabled and takes the token as a
- * query param, so a static frontend can call it directly — no Edge Function
- * needed (unlike Tiingo, which isn't CORS-enabled). The tradeoff is that the
- * token ships in the client bundle. For a FREE, personal-use key that's an
- * accepted risk: the worst case is someone burning the free quota. Do NOT put a
- * paid key here.
+ * This module is kept only as the home of the shared `LiveQuote` shape that the
+ * quote store, the overlay, and the hooks consume. There is intentionally no
+ * browser-side network fetch here anymore.
  *
  * TOKEN
  * -----
- * Read from `VITE_FINNHUB_TOKEN`. When unset, `hasFinnhub()` is false and
- * `fetchQuote` returns null, so the whole live-quote layer no-ops and every
- * screen falls back to the Tiingo daily close it already uses.
- *
- * RATE LIMIT
- * ----------
- * Finnhub free tier is ~60 requests/minute and `/quote` is ONE symbol per
- * request. This module does NOT pace requests itself — the shared
- * liveQuoteScheduler owns the app-wide budget and paces calls. Keep it that way
- * so two screens asking for the same symbol don't double-spend.
+ * `VITE_FINNHUB_TOKEN` is no longer used by the browser. The server settler uses
+ * its own `FINNHUB_KEY` Supabase secret. The VITE var can be removed from the
+ * client env; it is ignored here.
  */
-
-const FINNHUB_BASE = 'https://finnhub.io/api/v1'
-
-/** The browser-exposed free token. Empty string when unconfigured. */
-const TOKEN = (import.meta.env.VITE_FINNHUB_TOKEN as string | undefined)?.trim() ?? ''
-
-/** True when a Finnhub token is configured (live quotes are possible). */
-export function hasFinnhub(): boolean {
-  return TOKEN.length > 0
-}
 
 /** A single real-time-ish quote for one symbol. */
 export interface LiveQuote {
@@ -49,64 +27,12 @@ export interface LiveQuote {
   price: number
   /** Prior session close (for % change vs the prior day). */
   prevClose: number
-  /** Today's open. */
+  /** Today's open. May be 0 when sourced from intraday_quotes (not stored there). */
   open: number
-  /** Today's high. */
+  /** Today's high. May be 0 when sourced from intraday_quotes (not stored there). */
   high: number
-  /** Today's low. */
+  /** Today's low. May be 0 when sourced from intraday_quotes (not stored there). */
   low: number
-  /** When this quote was fetched (client clock, ms epoch). */
+  /** When this quote was captured (ms epoch). */
   fetchedAt: number
-}
-
-/**
- * Finnhub `/quote` response shape (the fields we use):
- *   c = current price, d = change, dp = percent change,
- *   h = high, l = low, o = open, pc = previous close, t = quote unix time (s).
- * A symbol with no data comes back with c === 0 and t === 0.
- */
-interface FinnhubQuoteResponse {
-  c: number
-  d: number | null
-  dp: number | null
-  h: number
-  l: number
-  o: number
-  pc: number
-  t: number
-}
-
-/**
- * Fetch a single real-time quote for `symbol`. Returns null when:
- *   • no token is configured,
- *   • the request fails (network / non-2xx / rate limit), or
- *   • Finnhub returns an empty quote (c === 0 && t === 0 — unknown symbol).
- *
- * Never throws — callers treat null as "no live price, fall back to daily
- * close". The scheduler decides WHEN to call this; this function is a dumb,
- * one-shot fetch.
- */
-export async function fetchQuote(symbol: string, signal?: AbortSignal): Promise<LiveQuote | null> {
-  if (!hasFinnhub()) return null
-  const url = `${FINNHUB_BASE}/quote?symbol=${encodeURIComponent(symbol)}&token=${encodeURIComponent(TOKEN)}`
-  try {
-    const res = await fetch(url, { signal })
-    if (!res.ok) return null
-    const data = (await res.json()) as FinnhubQuoteResponse
-    // Empty quote: unknown/unsupported symbol on the free tier.
-    if (!data || (data.c === 0 && data.t === 0)) return null
-    if (!Number.isFinite(data.c) || data.c <= 0) return null
-    return {
-      symbol,
-      price: data.c,
-      prevClose: Number.isFinite(data.pc) && data.pc > 0 ? data.pc : data.c,
-      open: data.o,
-      high: data.h,
-      low: data.l,
-      fetchedAt: Date.now(),
-    }
-  } catch {
-    // Aborted or network error — treat as "no quote".
-    return null
-  }
 }

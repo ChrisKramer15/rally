@@ -35,11 +35,11 @@ function StatusPill({ status }: { status: PipelineStatus }) {
 
 /** Visual family for a Finnhub health status: label + dot color class. */
 const FINNHUB_HEALTH: Record<FinnhubHealthStatus, { label: string; tone: string; note: string }> = {
-  ok: { label: 'Live', tone: 'ok', note: 'Real-time quotes flowing' },
-  stale: { label: 'Degraded', tone: 'warn', note: 'No fresh quote — rate-limited or slow' },
-  error: { label: 'Error', tone: 'down', note: 'Last request failed' },
-  closed: { label: 'Idle', tone: 'muted', note: 'Market closed — not polling' },
-  unconfigured: { label: 'Off', tone: 'muted', note: 'No VITE_FINNHUB_TOKEN set' },
+  ok: { label: 'Live', tone: 'ok', note: 'Settler writing fresh quotes' },
+  stale: { label: 'Degraded', tone: 'warn', note: 'No fresh quote — settler idle or degraded' },
+  error: { label: 'Error', tone: 'down', note: 'Quote feed read failed' },
+  closed: { label: 'Idle', tone: 'muted', note: 'Market closed — not quoting' },
+  unconfigured: { label: 'Off', tone: 'muted', note: 'Supabase not configured' },
 }
 
 /**
@@ -47,7 +47,8 @@ const FINNHUB_HEALTH: Record<FinnhubHealthStatus, { label: string; tone: string;
  * is visible. This is additive — it doesn't replace or alter the Tiingo
  * collector monitoring below.
  *   • Tiingo — daily-bar collector, derived from the latest recorded run.
- *   • Finnhub — near-real-time quotes, from a live SPY probe.
+ *   • Finnhub — near-real-time quotes, from the freshest intraday_quotes row
+ *     (written server-side by the settler; the browser no longer probes Finnhub).
  */
 function FeedHealth({ lastRun }: { lastRun: PipelineRun | null }) {
   const finnhub = useFinnhubHealth()
@@ -88,7 +89,7 @@ function FeedHealth({ lastRun }: { lastRun: PipelineRun | null }) {
         <div className="pipe-health-status">{fh.label}</div>
         <div className="pipe-health-note">
           {finnhub.price != null
-            ? `SPY $${formatCurrency(finnhub.price)}${finnhub.lastCheck ? ` · ${formatWhen(new Date(finnhub.lastCheck).toISOString())}` : ''}`
+            ? `${finnhub.symbol ?? 'Latest'} $${formatCurrency(finnhub.price)}${finnhub.lastCheck ? ` · ${formatWhen(new Date(finnhub.lastCheck).toISOString())}` : ''}`
             : fh.note}
         </div>
       </div>

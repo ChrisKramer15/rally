@@ -17,6 +17,22 @@
 --     'settle_positions_url'
 --   );
 --
+-- ⚠️  YOU MUST REPLACE <PROJECT_REF> WITH YOUR ACTUAL PROJECT REF (the subdomain
+--     of your Supabase URL, e.g. abcd1234efgh). Pasting the line verbatim stores
+--     a literal '<PROJECT_REF>' hostname, which pg_net rejects with "Bad
+--     hostname" — the cron then FAILS SILENTLY every minute and no order ever
+--     fills/settles. Migration 0023 adds a guard that turns this into a loud,
+--     actionable error, but get the value right here to avoid it entirely.
+--
+--     To CHANGE it later (vault.secrets is not directly UPDATE-able), use:
+--       select vault.update_secret(
+--         (select id from vault.secrets where name = 'settle_positions_url'),
+--         'https://<PROJECT_REF>.supabase.co/functions/v1/settle-positions'
+--       );
+--     Verify with:
+--       select name, decrypted_secret from vault.decrypted_secrets
+--        where name = 'settle_positions_url';   -- must show NO angle brackets
+--
 -- Also set the Finnhub server secret (CLI), so the function can quote prices:
 --
 --   supabase secrets set FINNHUB_KEY=your_finnhub_token

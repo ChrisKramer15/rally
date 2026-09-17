@@ -62,12 +62,13 @@ export const DEFAULT_BUDGET = 25_000
 
 /**
  * Maximum number of concurrent positions (open + pending COMBINED). Capped to
- * match the Finnhub live-quote ceiling: we can only pull real-time data for
- * this many tickers, and every open/pending position wants a live mark, so
- * allowing more positions than we can quote would leave some marked to a stale
- * daily close. Placing a new order while at the cap is refused.
+ * match the live-quote ceiling: the settle-positions Edge Function quotes and
+ * persists at most MAX_SYMBOLS (45) tickers per minute, and every open/pending
+ * position wants a live mark, so allowing more positions than the settler can
+ * quote would leave some marked to a stale daily close. Placing a new order
+ * while at the cap is refused. Keep this in sync with the settler's MAX_SYMBOLS.
  */
-export const MAX_POSITIONS = 25
+export const MAX_POSITIONS = 45
 
 /** Stop-loss fallback distance from entry when no distal line is known (8%). */
 const DEFAULT_STOP_LOSS_PCT = 0.08

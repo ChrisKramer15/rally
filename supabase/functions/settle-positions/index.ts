@@ -34,10 +34,24 @@ import {
 // --- config ----------------------------------------------------------------
 
 const FINNHUB_BASE = 'https://finnhub.io/api/v1'
-/** Hard ceiling on distinct symbols quoted per run (matches the app's live cap). */
-const MAX_SYMBOLS = 30
+/**
+ * Hard ceiling on distinct symbols quoted per run. Safe at 45 because the
+ * browser no longer calls Finnhub directly (it reads intraday_quotes instead),
+ * so this settler owns the whole ~60/min free-tier budget. 45 leaves ~15
+ * requests of headroom under 60 for per-symbol retries and clock jitter.
+ */
+const MAX_SYMBOLS = 45
 /** Small fetch concurrency — gentle on Finnhub's 60/min free tier. */
 const FETCH_CONCURRENCY = 5
+/**
+ * Delay between fetch batches, so requests are spread across the minute rather
+ * than bursting in one second (which can trip Finnhub's per-second sub-limit
+ * even when the per-minute count is legal). With FETCH_CONCURRENCY=5 and
+ * MAX_SYMBOLS=45 that's 9 batches; a 750ms gap spreads them over ~6s.
+ */
+const BATCH_PACING_MS = 750
+/** Prune intraday_quotes rows older than this many hours on each run. */
+const QUOTE_RETENTION_HOURS = 48
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -87,6 +101,16 @@ interface FinnhubQuote {
   t: number
 }
 
+/** A captured quote: the current price plus the extra fields we persist. */
+interface Quote {
+  /** Current/last price (`c`). */
+  price: number
+  /** Prior session close (`pc`), or null when the provider didn't supply one. */
+  prevClose: number | null
+  /** Provider quote time (`t`, unix seconds), or null. */
+  providerTs: number | null
+}
+
 // --- helpers ---------------------------------------------------------------
 
 function num(v: number | string | null | undefined): number {
@@ -111,8 +135,13 @@ function easternISODate(d: Date): string {
   return `${get('year')}-${get('month')}-${get('day')}`
 }
 
-/** Fetch one Finnhub quote. Returns null on empty/unknown symbol. Throws (classified) on transient errors. */
-async function fetchQuote(symbol: string, token: string): Promise<number | null> {
+/**
+ * Fetch one Finnhub quote. Returns null on empty/unknown symbol. Throws
+ * (classified) on transient errors. Returns the full quote (price + prev close
+ * + provider timestamp) so the caller can both settle against `price` and
+ * persist the whole thing to intraday_quotes.
+ */
+async function fetchQuote(symbol: string, token: string): Promise<Quote | null> {
   const url = `${FINNHUB_BASE}/quote?symbol=${encodeURIComponent(symbol)}&token=${encodeURIComponent(token)}`
   return await withRetry(async () => {
     const res = await fetch(url)
@@ -122,8 +151,53 @@ async function fetchQuote(symbol: string, token: string): Promise<number | null>
     }
     const q = (await res.json()) as FinnhubQuote
     if (!q || (q.c === 0 && q.t === 0)) return null // unknown symbol
-    return Number.isFinite(q.c) && q.c > 0 ? q.c : null
+    if (!(Number.isFinite(q.c) && q.c > 0)) return null
+    return {
+      price: q.c,
+      prevClose: Number.isFinite(q.pc) && q.pc > 0 ? q.pc : null,
+      providerTs: Number.isFinite(q.t) && q.t > 0 ? q.t : null,
+    }
   })
+}
+
+/**
+ * Best-effort persist of the quotes captured this run into intraday_quotes.
+ * Mirrors how the collector treats tiingo_request_log: a logging/write failure
+ * here must NEVER break the fill/settle path, so all errors are swallowed. Also
+ * best-effort prunes rows older than the retention window to keep the table
+ * bounded.
+ */
+async function persistQuotes(
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  quotes: Map<string, Quote>,
+  quotedAtIso: string,
+): Promise<void> {
+  if (quotes.size === 0) return
+  const rows = Array.from(quotes.entries()).map(([symbol, q]) => ({
+    symbol,
+    quoted_at: quotedAtIso,
+    price: q.price,
+    prev_close: q.prevClose,
+    provider_ts: q.providerTs != null ? new Date(q.providerTs * 1000).toISOString() : null,
+  }))
+  try {
+    // onConflict guards the rare case of two runs sharing a quoted_at second.
+    await supabase.from('intraday_quotes').upsert(rows, { onConflict: 'symbol,quoted_at' })
+  } catch (e) {
+    console.error('intraday_quotes insert failed:', errMessage(e))
+  }
+  try {
+    const cutoff = new Date(Date.now() - QUOTE_RETENTION_HOURS * 3_600_000).toISOString()
+    await supabase.from('intraday_quotes').delete().lt('quoted_at', cutoff)
+  } catch {
+    // best-effort prune; stale rows only slightly inflate the table.
+  }
+}
+
+/** Sleep helper for pacing fetch batches. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 /** Best-effort run log into pipeline_runs, tagged so the UI can distinguish it. */
@@ -202,12 +276,11 @@ Deno.serve(async (req) => {
   // ── 1) Read pending + open positions ──────────────────────────────────────
   let rows: TradeRow[]
   try {
-    const { data, error } = await withRetry(async () => {
+    const data = await withRetry(async () => {
       const r = await supabase.from('trades').select('*').in('status', ['pending', 'open'])
       if (r.error) throw retryableError(r.error.message)
-      return r
+      return r.data
     })
-    if (error) throw new Error(error.message)
     rows = (data ?? []) as TradeRow[]
   } catch (e) {
     return await finish('failure', {}, `Read trades failed: ${errMessage(e)}`)
@@ -219,15 +292,24 @@ Deno.serve(async (req) => {
 
   // ── 2) Quote each distinct symbol (capped) ────────────────────────────────
   const symbols = Array.from(new Set(rows.map((r) => r.symbol.toUpperCase()))).slice(0, MAX_SYMBOLS)
+  // Full captured quotes (persisted to intraday_quotes). priceBySymbol is the
+  // price-only view the fill/settle logic reads.
+  const quoteBySymbol = new Map<string, Quote>()
   const priceBySymbol = new Map<string, number>()
   const errorMap: Record<string, string> = {}
   for (let i = 0; i < symbols.length; i += FETCH_CONCURRENCY) {
+    // Pace batches (except the first) so ~40 requests spread across the minute
+    // instead of bursting — avoids Finnhub's per-second sub-limit.
+    if (i > 0 && BATCH_PACING_MS > 0) await sleep(BATCH_PACING_MS)
     const batch = symbols.slice(i, i + FETCH_CONCURRENCY)
     await Promise.all(
       batch.map(async (sym) => {
         try {
-          const price = await fetchQuote(sym, finnhubKey)
-          if (price != null) priceBySymbol.set(sym, price)
+          const quote = await fetchQuote(sym, finnhubKey)
+          if (quote != null) {
+            quoteBySymbol.set(sym, quote)
+            priceBySymbol.set(sym, quote.price)
+          }
         } catch (e) {
           errorMap[sym] = errMessage(e)
         }
@@ -237,6 +319,11 @@ Deno.serve(async (req) => {
 
   const nowIso = startedAt.toISOString()
   const todayEt = easternISODate(startedAt)
+
+  // Persist the quotes we just pulled so the browser can read live prices from
+  // the DB (no Finnhub call) and we accumulate intraday history. Best-effort —
+  // never blocks or fails the fill/settle path below.
+  await persistQuotes(supabase, quoteBySymbol, nowIso)
 
   // ── 3) Fill pending limits + 4) settle open positions ─────────────────────
   const toUpsertTrades: Record<string, unknown>[] = []

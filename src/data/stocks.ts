@@ -124,13 +124,14 @@ export const MAX_WATCHLISTS = 10
 // is what's measured against this. Surfaced in the UI as a budget gauge.
 export const TIINGO_MONTHLY_SYMBOL_CAP = 500
 
-// Hard ceiling on how many tickers we subscribe to Finnhub real-time quotes for
-// at once. The live set is scoped to COMMITTED tickers only — open positions,
-// pending limit orders, and the symbol open in the trade ticket — so in
-// practice it stays well below this. Finnhub free is ~60 requests/minute and
-// /quote is one symbol per request; this cap is a safety backstop that keeps us
-// comfortably under that even at the scheduler's fastest cadence.
-export const LIVE_QUOTE_CAP = 25
+// Hard ceiling on how many tickers the browser requests live quotes for at once.
+// The live set is scoped to COMMITTED tickers only — open positions, pending
+// limit orders, and the symbol open in the trade ticket. The browser now READS
+// these from the intraday_quotes table (populated server-side by the settler),
+// so this no longer maps to Finnhub requests; it's kept aligned with the
+// settler's per-run cap (MAX_SYMBOLS = 45) — the settler only quotes/persists up
+// to that many symbols, so requesting more here would just find no rows.
+export const LIVE_QUOTE_CAP = 45
 
 /** Default watchlist symbols, derived from the seed stocks. */
 export const DEFAULT_SYMBOLS: string[] = INITIAL_STOCKS.map((s) => s.symbol)
