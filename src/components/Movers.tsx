@@ -34,6 +34,7 @@ export function Movers({ stocks }: MoversProps) {
     <div className="panel movers">
       <div className="panel-head">
         <h2>Top Movers</h2>
+        <span className="panel-sub">Prior-day close</span>
       </div>
       <div className="mover-group">
         <h3 className="up">Gainers</h3>

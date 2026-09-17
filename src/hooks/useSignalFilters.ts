@@ -32,7 +32,19 @@ export interface SignalFilters {
   minRr: number
   /** Show only signals whose supply/demand zone is this quality (or all). */
   zoneGrade: ZoneGradeFilter
+  /**
+   * Freshness window in calendar days: how recent a symbol's latest explosive
+   * move must be to qualify as a signal. Unlike the other fields this isn't a
+   * "hide" filter but a remembered threshold — it persists across refreshes and
+   * is intentionally NOT reset by "Clear filters".
+   */
+  freshnessDays: number
 }
+
+/** Bounds for the freshness window, shared by the input and the loader clamp. */
+export const FRESHNESS_MIN = 1
+export const FRESHNESS_MAX = 120
+export const FRESHNESS_DEFAULT = 10
 
 export const DEFAULT_FILTERS: SignalFilters = {
   grade: 'all',
@@ -41,6 +53,7 @@ export const DEFAULT_FILTERS: SignalFilters = {
   minRelVolume: 0,
   minRr: 0,
   zoneGrade: 'all',
+  freshnessDays: FRESHNESS_DEFAULT,
 }
 
 const STORAGE_KEY = 'rally.signalFilters.v1'
@@ -82,6 +95,10 @@ function loadFilters(): SignalFilters {
           parsed.zoneGrade === 'weak'
             ? parsed.zoneGrade
             : 'all',
+        freshnessDays:
+          typeof parsed.freshnessDays === 'number' && Number.isFinite(parsed.freshnessDays)
+            ? Math.min(FRESHNESS_MAX, Math.max(FRESHNESS_MIN, Math.round(parsed.freshnessDays)))
+            : FRESHNESS_DEFAULT,
       }
     }
   } catch {

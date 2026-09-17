@@ -299,10 +299,16 @@ function App() {
 
       {view === 'dashboard' ? (
         <>
-          <section className="index-grid">
-            {indices.map((q) => (
-              <IndexCard key={q.symbol} quote={q} />
-            ))}
+          <section className="index-section">
+            <div className="index-section-head">
+              <h2>Indices</h2>
+              <span className="index-section-note">Prior-session daily close · not real-time</span>
+            </div>
+            <div className="index-grid">
+              {indices.map((q) => (
+                <IndexCard key={q.symbol} quote={q} />
+              ))}
+            </div>
           </section>
 
           <section className="main-grid">
@@ -310,6 +316,7 @@ function App() {
               stocks={stocks}
               flash={flash}
               onSelectSymbol={setSelectedSymbol}
+              lists={lists}
               action={
                 <WatchlistEditor
                   lists={lists}

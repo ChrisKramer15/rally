@@ -14,6 +14,7 @@ import {
   subscribeToPriceUpdates,
 } from '../data/supabaseDailyStore'
 import { HISTORY_LEN } from '../data/historyStore'
+import { lookupTickerName } from '../data/tickerNames'
 import {
   INITIAL_STOCKS,
   MAX_WATCHLIST,
@@ -71,9 +72,13 @@ function barsToStock(symbol: string, name: string, bars: DailyBar[]): Stock {
   const closes = bars.map((b) => b.close)
   const price = closes.at(-1) ?? 0
   const prevClose = closes.at(-2) ?? price
+  // If the passed-in name is missing or just the ticker (e.g. a cache entry
+  // saved before names resolved), fall back to the static map so the row shows
+  // a real company name instead of repeating the symbol.
+  const displayName = name && name !== symbol ? name : lookupTickerName(symbol) ?? symbol
   return {
     symbol,
-    name,
+    name: displayName,
     price,
     prevClose,
     history: closes.slice(-HISTORY_LEN),
@@ -92,7 +97,7 @@ function simulate(symbol: string, prev?: Stock): Stock {
   const history = [...priorHistory.slice(-(HISTORY_LEN - 1)), price]
   return {
     symbol,
-    name: prev?.name ?? seed?.name ?? symbol,
+    name: prev?.name ?? seed?.name ?? lookupTickerName(symbol) ?? symbol,
     price,
     prevClose,
     history,
@@ -348,9 +353,17 @@ export function useWatchlistMarket(symbols: string[]): UseWatchlistMarketResult 
   return { stocks, flash, lastUpdated, status, error, budget, refresh }
 }
 
-/** Resolve a display name: prefer cached, else look it up in Supabase (best-effort). */
+/**
+ * Resolve a display name, cheapest source first:
+ *   1. a real cached name (already resolved on a prior read),
+ *   2. the bundled static ticker->name map (free, offline, no network),
+ *   3. a name stored in Supabase (best-effort network fallback),
+ *   4. the ticker itself (the row hides the duplicate second line).
+ */
 async function resolveName(symbol: string, cachedName?: string): Promise<string> {
   if (cachedName && cachedName !== symbol) return cachedName
+  const staticName = lookupTickerName(symbol)
+  if (staticName) return staticName
   const name = await fetchNameFromSupabase(symbol)
   return name ?? symbol
 }

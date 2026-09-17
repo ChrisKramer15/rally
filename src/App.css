@@ -119,9 +119,25 @@
 }
 
 /* ---------- Index cards ---------- */
+.index-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  gap: 12px;
+}
+.index-section-head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+.index-section-note {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--mono);
+}
 .index-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 16px;
 }
 .index-card {
@@ -229,13 +245,53 @@
 }
 
 /* ---------- Watchlist ---------- */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.watch-filter select {
+  background: var(--panel);
+  color: var(--text-h);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 5px 8px;
+  font-size: 12px;
+  font-family: var(--mono);
+  cursor: pointer;
+}
+.watch-filter select:focus-visible {
+  outline: 2px solid var(--neon-purple);
+  outline-offset: 1px;
+}
+.watch-daily-note {
+  margin: 0 0 8px;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--mono);
+}
 .watch-row {
   display: grid;
-  grid-template-columns: 2fr 1.4fr 1fr 1fr;
+  grid-template-columns: 2fr 1.4fr 2fr;
   align-items: center;
   gap: 10px;
   padding: 10px 8px;
   border-radius: 10px;
+}
+/* Right-hand quote cell holds Price + Change. Side by side on desktop; stacks
+   vertically on mobile (the Robinhood/Yahoo pattern) so the sparkline can stay. */
+.watch-quote,
+.watch-quote-head {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: center;
+  gap: 10px;
 }
 .watch-head {
   font-size: 11px;
@@ -371,11 +427,13 @@
 
 /* ---------- Responsive ---------- */
 @media (max-width: 1024px) {
-  .index-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
   .main-grid {
     grid-template-columns: 1fr;
+  }
+  /* Once the panels stack, show Top Movers above the Watchlist (the DOM order
+     is Watchlist first for the desktop 2-column layout). */
+  .main-grid .movers {
+    order: -1;
   }
 }
 @media (max-width: 720px) {
@@ -400,15 +458,60 @@
 }
 
 @media (max-width: 560px) {
+  /* Keep SPY / QQQ / DIA on a single row on phones; tighten padding + hide the
+     per-card sparkline so all three fit across without horizontal scroll. */
   .index-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
   }
+  .index-card {
+    padding: 10px;
+  }
+  .index-card header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+  .index-card .index-name {
+    font-size: 10px;
+  }
+  .index-card .index-value {
+    font-size: 15px;
+  }
+  /* Keep the sparkline visible on phones (same as the watchlist rows); let it
+     fill the card width instead of its fixed 220px. */
+  .index-card .sparkline {
+    width: 100%;
+    height: 32px;
+  }
+  /* Keep symbol, sparkline, AND the price/change all visible on phones. The
+     sparkline flexes to whatever space is left, and Price stacks over Change on
+     the right (the Robinhood / Yahoo Finance mobile row pattern). */
   .watch-row {
-    grid-template-columns: 1.6fr 1fr 1fr;
+    grid-template-columns: minmax(0, 1.4fr) minmax(48px, 1fr) auto;
+    gap: 8px;
+    padding: 10px 4px;
   }
-  .watch-head .col-chart,
-  .watch-list .col-chart {
+  .watch-quote,
+  .watch-quote-head {
+    grid-template-columns: 1fr;
+    gap: 0;
+    justify-items: end;
+  }
+  .watch-quote .price {
+    font-size: 13px;
+  }
+  .watch-quote .change {
+    font-size: 12px;
+  }
+  /* Hide the redundant "Change" header label since price/change now stack under
+     a single right-aligned column. */
+  .watch-quote-head .col-num:last-child {
     display: none;
+  }
+  /* Let the mobile sparkline fill its cell rather than its fixed 110px width. */
+  .col-chart .sparkline {
+    width: 100%;
   }
   .brand h1 {
     font-size: 24px;
