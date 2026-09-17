@@ -52,6 +52,13 @@ interface TradeTicketModalProps {
    * → 'long', a down move (supply zone) → 'short'. The user can still override.
    */
   defaultSide?: TradeSide
+  /**
+   * True when the portfolio is at its concurrent-position ceiling and this would
+   * be a NEW position. Disables submit and shows an explanation.
+   */
+  atCapacity?: boolean
+  /** The concurrent-position ceiling, for the at-capacity message. */
+  maxPositions?: number
   onSubmit: (ticket: TradeTicket) => void
   onClose: () => void
 }
@@ -66,6 +73,8 @@ export function TradeTicketModal({
   atr,
   swingTarget,
   defaultSide = 'long',
+  atCapacity = false,
+  maxPositions,
   onSubmit,
   onClose,
 }: TradeTicketModalProps) {
@@ -159,6 +168,7 @@ export function TradeTicketModal({
   const riskAmount = preview ? shares * Math.abs(entry - preview.stop) : null
 
   const canSubmit =
+    !atCapacity &&
     shares >= 1 &&
     (orderType === 'market' || (orderType === 'limit' && limitPrice > 0))
 
@@ -338,6 +348,15 @@ export function TradeTicketModal({
           </span>
           <span className="tt-cost-val">${formatCurrency(estCost)}</span>
         </div>
+
+        {/* ── At-capacity notice ── */}
+        {atCapacity && (
+          <p className="tt-capacity-notice" role="alert">
+            Position limit reached{maxPositions ? ` (${maxPositions}/${maxPositions})` : ''}. Close or
+            cancel an existing position before placing a new one — live pricing is capped to this many
+            tickers.
+          </p>
+        )}
 
         {/* ── Actions ── */}
         <div className="tt-actions">

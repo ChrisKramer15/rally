@@ -958,6 +958,69 @@
   gap: 16px;
 }
 
+/* ── Feed health strip (both providers, side by side) ── */
+.pipe-health {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+.pipe-health-card {
+  padding: 14px 16px;
+}
+.pipe-health-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pipe-health-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+}
+.pipe-health-dot.pipe-health-ok {
+  background: var(--neon-green);
+  box-shadow: 0 0 8px var(--neon-green);
+}
+.pipe-health-dot.pipe-health-warn {
+  background: var(--neon-orange);
+  box-shadow: 0 0 8px var(--neon-orange);
+}
+.pipe-health-dot.pipe-health-down {
+  background: var(--neon-red);
+  box-shadow: 0 0 8px var(--neon-red);
+}
+.pipe-health-dot.pipe-health-muted {
+  background: var(--muted);
+}
+.pipe-health-name {
+  font-weight: 700;
+  color: var(--text-h);
+}
+.pipe-health-role {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--mono);
+  margin-left: auto;
+}
+.pipe-health-status {
+  font-family: var(--mono);
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-h);
+  margin-top: 8px;
+}
+.pipe-health-note {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+@media (max-width: 560px) {
+  .pipe-health {
+    grid-template-columns: 1fr;
+  }
+}
+
 .pipe-stats {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -1838,6 +1901,104 @@
   color: var(--muted);
 }
 
+/* ── Signals bar: always-visible counts + Filters toggle ── */
+.em-signals-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 20px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+}
+
+.em-filters-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-h);
+  background: rgba(177, 77, 255, 0.1);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+.em-filters-toggle:hover {
+  background: rgba(177, 77, 255, 0.18);
+}
+.em-filters-toggle.is-open {
+  border-color: var(--neon-purple);
+}
+.em-filters-toggle:focus-visible {
+  outline: 2px solid var(--neon-purple);
+  outline-offset: 1px;
+}
+.em-filters-toggle-caret {
+  font-size: 10px;
+  color: var(--muted);
+}
+.em-filters-active-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--neon-purple);
+  box-shadow: 0 0 6px var(--neon-purple);
+}
+
+/* ── Compact portfolio strip (Signals page) ── */
+.em-pf-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  padding: 10px 16px;
+}
+.em-pf-strip-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.em-pf-strip-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+}
+.em-pf-strip-val {
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-h);
+  font-variant-numeric: tabular-nums;
+}
+.em-pf-strip-val.up { color: var(--neon-green); }
+.em-pf-strip-val.down { color: var(--neon-red); }
+.em-pf-strip-val .up { color: var(--neon-green); }
+.em-pf-strip-val .down { color: var(--neon-red); }
+.em-pf-strip-pct {
+  font-size: 12px;
+  opacity: 0.85;
+}
+.em-pf-strip-sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--panel-border);
+}
+.em-pf-strip-muted .em-pf-strip-val {
+  font-size: 13px;
+  font-weight: 500;
+}
+@media (max-width: 560px) {
+  /* Drop the vertical separators and the secondary open/realized split on the
+     smallest screens so the strip stays a tidy one/two lines. */
+  .em-pf-strip-sep { display: none; }
+  .em-pf-strip-muted { display: none; }
+}
+
 /* ── Portfolio summary bar (Signals page) ── */
 .em-portfolio {
   padding: 16px 20px;
@@ -2288,6 +2449,13 @@
 .em-price {
   color: var(--text-h);
   font-weight: 600;
+}
+.em-signal-price {
+  display: block;
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--muted);
+  font-family: var(--mono);
 }
 
 .em-change {
@@ -3086,6 +3254,16 @@
   color: var(--text-h);
 }
 
+.tt-capacity-notice {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--neon-orange);
+  background: rgba(255, 140, 0, 0.1);
+  border: 1px solid rgba(255, 140, 0, 0.3);
+  border-radius: 8px;
+}
 .tt-actions {
   display: flex;
   justify-content: flex-end;

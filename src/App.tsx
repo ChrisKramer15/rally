@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import { changePct } from './data/stocks'
+import { changePct, LIVE_QUOTE_CAP } from './data/stocks'
 import { loadCached } from './data/dailyCache'
+import { useLiveQuotes } from './hooks/useLiveQuotes'
+import { overlayLiveQuotes } from './data/liveQuoteOverlay'
 import { formatEasternTime } from './data/marketCalendar'
 import type { DailyBar } from './data/tiingo'
 import { detectBasesForBars, selectSignalZone, type ZoneGrade, type ZoneKind } from './hooks/useBasingZones'
@@ -51,19 +53,57 @@ function App() {
   // Paper-trading portfolio for the Backtest page (persisted to localStorage).
   const portfolio = useBacktestPortfolio()
 
+  // ── Near-real-time (Finnhub) live quotes ────────────────────────────────
+  // Tiingo daily closes remain the source of truth for the homepage, watchlist,
+  // movers, index cards, and ALL signal generation. Finnhub is layered in ONLY
+  // for tickers you've actually COMMITTED to — open positions and pending limit
+  // orders — plus the one you're actively pricing in the trade ticket. That's
+  // the deliberate scope: we only spend real-time quota on tickers worth a limit
+  // order to you, never on the broad signal list.
+
   // Ticker detail modal — null means closed.
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
   const selectedStock = selectedSymbol ? stocks.find((s) => s.symbol === selectedSymbol) ?? null : null
 
   // Trade ticket — the symbol the user is placing an order for (null = closed).
   const [tradeSymbol, setTradeSymbol] = useState<string | null>(null)
-  const tradeStock = tradeSymbol ? stocks.find((s) => s.symbol === tradeSymbol) ?? null : null
 
   // Trade action: open the order ticket. Closes any detail modal first.
   const handleTrade = (symbol: string) => {
     setSelectedSymbol(null)
     setTradeSymbol(symbol)
   }
+
+  // Assemble the capped live-quote symbol set: every open/pending position,
+  // plus the symbol currently open in the trade ticket — deduped and limited to
+  // LIVE_QUOTE_CAP as a hard safety ceiling (you'll rarely approach it).
+  const liveSymbols = useMemo(() => {
+    const seen = new Set<string>()
+    const out: string[] = []
+    const add = (sym?: string | null) => {
+      if (!sym) return
+      const s = sym.toUpperCase()
+      if (seen.has(s) || out.length >= LIVE_QUOTE_CAP) return
+      seen.add(s)
+      out.push(s)
+    }
+    for (const p of portfolio.positions) add(p.symbol)
+    return out
+  }, [portfolio.positions])
+
+  // Subscribe to live quotes for that set (shared, budget-paced scheduler).
+  const { quotes: liveQuotes } = useLiveQuotes(liveSymbols)
+
+  // Daily-close feed with live prices overlaid — for VALUATION/DISPLAY of
+  // EXISTING positions on the Backtest surface only. The plain `stocks` (daily
+  // close) still feeds the homepage, watchlist, movers, index cards, the Signals
+  // table, AND the trade ticket (you commit at the daily-close-informed price;
+  // live data only tracks the order once it's resting/open).
+  const liveStocks = useMemo(() => overlayLiveQuotes(stocks, liveQuotes), [stocks, liveQuotes])
+
+  // The trade ticket prices off the TIINGO daily close (not live) — the order is
+  // placed against yesterday's close; Finnhub tracks it after it's pending/open.
+  const tradeStock = tradeSymbol ? stocks.find((s) => s.symbol === tradeSymbol) ?? null : null
 
   // Zone context for the symbol being traded, from its most recent basing zone:
   //   • proximal → seeds the limit-order price (the entry line)
@@ -177,8 +217,8 @@ function App() {
   // trade ticket sizes its 1%-risk default against, so a stop-out costs ≤1% of
   // the whole portfolio, not just the starting budget.
   const portfolioSummary = useMemo(
-    () => computePortfolioSummary(portfolio.budget, portfolio.positions, stocks, portfolio.closed),
-    [portfolio.budget, portfolio.positions, stocks, portfolio.closed],
+    () => computePortfolioSummary(portfolio.budget, portfolio.positions, liveStocks, portfolio.closed),
+    [portfolio.budget, portfolio.positions, liveStocks, portfolio.closed],
   )
 
   // Ticker tape is always sorted alphabetically, regardless of the watchlist's
@@ -337,7 +377,7 @@ function App() {
       ) : view === 'signals' ? (
         <ExplosiveMoves stocks={stocks} status={status} portfolio={portfolio} onTrade={handleTrade} />
       ) : view === 'backtest' ? (
-        <Backtest stocks={stocks} portfolio={portfolio} />
+        <Backtest stocks={liveStocks} portfolio={portfolio} />
       ) : (
         <DataPipeline />
       )}
@@ -369,6 +409,13 @@ function App() {
           atr={tradeZone?.atr ?? null}
           swingTarget={tradeZone?.swingTarget ?? null}
           defaultSide={tradeZone?.side ?? 'long'}
+          /* Block new orders once at the position ceiling — but not when this
+             symbol is already a position (re-opening its ticket is fine). */
+          atCapacity={
+            portfolio.atPositionLimit &&
+            !portfolio.positions.some((p) => p.symbol === tradeStock.symbol)
+          }
+          maxPositions={portfolio.maxPositions}
           onSubmit={handleSubmitTicket}
           onClose={() => setTradeSymbol(null)}
         />

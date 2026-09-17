@@ -26,7 +26,11 @@ import type { DailyBar } from './tiingo'
 /** Max daily bars retained per symbol. ~1 trading year covers sparklines + 20/50-day indicators. */
 export const MAX_BARS = 260
 
-const CACHE_KEY = 'rally.dailyCache.v1'
+// v2: bumped when the freshness-stamping rule changed (stamp the MIN of the
+// clock day and the newest bar's real date). v1 entries could be stamped "fresh
+// for today" while holding the prior session's last bar; discarding them forces
+// a clean re-read under the corrected rule.
+const CACHE_KEY = 'rally.dailyCache.v2'
 
 /** Per-symbol cache entry: the bars plus the trading day they were confirmed for. */
 export interface CachedSymbol {
@@ -106,9 +110,24 @@ export function saveSymbol(
   now: Date = new Date(),
 ): void {
   const cache = readCache()
+  const trimmed = bars.slice(-MAX_BARS)
+  // Freshness must reflect the bars we ACTUALLY hold, not just the clock. If the
+  // server-side collector hasn't written today's final bar yet, a read can come
+  // back ending on the PRIOR session even though effectiveTradingDay() has
+  // already rolled to today. Stamping "today" then would poison the cache: the
+  // symbol would be treated as fresh (skipped) for the rest of the day while
+  // holding a stale last bar — which is exactly the bug where the Signals price
+  // (from this cache) lagged the chart (a direct Supabase read). So stamp the
+  // MIN of the clock's effective day and the newest bar's real date: if today's
+  // bar is missing, the symbol stays stale and gets re-read next cycle (and the
+  // realtime subscription re-reads the moment the collector writes it).
+  const clockDay = effectiveTradingDay(now)
+  const newestBarDate = trimmed.length > 0 ? trimmed[trimmed.length - 1].date : undefined
+  const stampedDay =
+    newestBarDate && newestBarDate < clockDay ? newestBarDate : clockDay
   cache[symbol] = {
-    bars: bars.slice(-MAX_BARS),
-    lastFetchedTradingDay: effectiveTradingDay(now),
+    bars: trimmed,
+    lastFetchedTradingDay: stampedDay,
     name,
   }
   writeCache(cache)

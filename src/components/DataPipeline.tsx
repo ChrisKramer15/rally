@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react'
 import { usePipelineRuns } from '../hooks/usePipelineRuns'
+import { useFinnhubHealth, type FinnhubHealthStatus } from '../hooks/useFinnhubHealth'
+import { formatCurrency } from '../data/stocks'
 import { formatEasternDateTime } from '../data/marketCalendar'
 import type { PipelineRun, PipelineStage, PipelineStatus, StageStatus } from '../data/pipelineStore'
 
@@ -29,6 +31,69 @@ const STATUS_LABEL: Record<PipelineStatus, string> = {
 
 function StatusPill({ status }: { status: PipelineStatus }) {
   return <span className={`pipe-pill pipe-${status}`}>{STATUS_LABEL[status]}</span>
+}
+
+/** Visual family for a Finnhub health status: label + dot color class. */
+const FINNHUB_HEALTH: Record<FinnhubHealthStatus, { label: string; tone: string; note: string }> = {
+  ok: { label: 'Live', tone: 'ok', note: 'Real-time quotes flowing' },
+  stale: { label: 'Degraded', tone: 'warn', note: 'No fresh quote — rate-limited or slow' },
+  error: { label: 'Error', tone: 'down', note: 'Last request failed' },
+  closed: { label: 'Idle', tone: 'muted', note: 'Market closed — not polling' },
+  unconfigured: { label: 'Off', tone: 'muted', note: 'No VITE_FINNHUB_TOKEN set' },
+}
+
+/**
+ * Feed health strip: shows BOTH providers side by side so a failure in either
+ * is visible. This is additive — it doesn't replace or alter the Tiingo
+ * collector monitoring below.
+ *   • Tiingo — daily-bar collector, derived from the latest recorded run.
+ *   • Finnhub — near-real-time quotes, from a live SPY probe.
+ */
+function FeedHealth({ lastRun }: { lastRun: PipelineRun | null }) {
+  const finnhub = useFinnhubHealth()
+  const fh = FINNHUB_HEALTH[finnhub.status]
+
+  // Map the Tiingo collector's last-run status to the same tone vocabulary.
+  const tiingoTone =
+    lastRun == null
+      ? 'muted'
+      : lastRun.status === 'success'
+        ? 'ok'
+        : lastRun.status === 'partial'
+          ? 'warn'
+          : 'down'
+  const tiingoLabel =
+    lastRun == null ? 'No runs' : STATUS_LABEL[lastRun.status]
+
+  return (
+    <section className="pipe-health">
+      <div className="panel pipe-health-card">
+        <div className="pipe-health-head">
+          <span className={`pipe-health-dot pipe-health-${tiingoTone}`} />
+          <span className="pipe-health-name">Tiingo</span>
+          <span className="pipe-health-role">daily bars · signals</span>
+        </div>
+        <div className="pipe-health-status">{tiingoLabel}</div>
+        <div className="pipe-health-note">
+          {lastRun ? `Last run ${formatWhen(lastRun.startedAt)}` : 'Server-side collector'}
+        </div>
+      </div>
+
+      <div className="panel pipe-health-card">
+        <div className="pipe-health-head">
+          <span className={`pipe-health-dot pipe-health-${fh.tone}`} />
+          <span className="pipe-health-name">Finnhub</span>
+          <span className="pipe-health-role">real-time quotes</span>
+        </div>
+        <div className="pipe-health-status">{fh.label}</div>
+        <div className="pipe-health-note">
+          {finnhub.price != null
+            ? `SPY $${formatCurrency(finnhub.price)}${finnhub.lastCheck ? ` · ${formatWhen(new Date(finnhub.lastCheck).toISOString())}` : ''}`
+            : fh.note}
+        </div>
+      </div>
+    </section>
+  )
 }
 
 const STAGE_LABEL: Record<string, string> = {
@@ -171,6 +236,8 @@ export function DataPipeline() {
 
   return (
     <div className="pipe-page">
+      <FeedHealth lastRun={summary.lastRun ?? null} />
+
       <section className="pipe-stats">
         <div className="panel pipe-stat-card">
           <span className="pipe-stat-label">Success rate</span>

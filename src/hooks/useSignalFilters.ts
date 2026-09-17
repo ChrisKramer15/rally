@@ -39,12 +39,24 @@ export interface SignalFilters {
    * is intentionally NOT reset by "Clear filters".
    */
   freshnessDays: number
+  /**
+   * Minimum move size in ATR multiples that defines an "explosive" candle — the
+   * core scan threshold. Like `freshnessDays` this is a remembered threshold,
+   * not a "hide" filter: it persists across refreshes and is NOT reset by
+   * "Clear filters".
+   */
+  moveMultiple: number
 }
 
 /** Bounds for the freshness window, shared by the input and the loader clamp. */
 export const FRESHNESS_MIN = 1
 export const FRESHNESS_MAX = 120
 export const FRESHNESS_DEFAULT = 10
+
+/** Bounds for the Min Move (ATR multiple) threshold, shared by input + loader. */
+export const MOVE_MULTIPLE_MIN = 0.5
+export const MOVE_MULTIPLE_MAX = 10
+export const MOVE_MULTIPLE_DEFAULT = 2
 
 export const DEFAULT_FILTERS: SignalFilters = {
   grade: 'all',
@@ -54,9 +66,13 @@ export const DEFAULT_FILTERS: SignalFilters = {
   minRr: 0,
   zoneGrade: 'all',
   freshnessDays: FRESHNESS_DEFAULT,
+  moveMultiple: MOVE_MULTIPLE_DEFAULT,
 }
 
 const STORAGE_KEY = 'rally.signalFilters.v1'
+/** Separate key for Signals-page UI prefs (panel open/closed), so it can evolve
+ *  independently of the filter values. */
+const UI_STORAGE_KEY = 'rally.signalsUi.v1'
 
 function loadFilters(): SignalFilters {
   try {
@@ -99,6 +115,10 @@ function loadFilters(): SignalFilters {
           typeof parsed.freshnessDays === 'number' && Number.isFinite(parsed.freshnessDays)
             ? Math.min(FRESHNESS_MAX, Math.max(FRESHNESS_MIN, Math.round(parsed.freshnessDays)))
             : FRESHNESS_DEFAULT,
+        moveMultiple:
+          typeof parsed.moveMultiple === 'number' && Number.isFinite(parsed.moveMultiple)
+            ? Math.min(MOVE_MULTIPLE_MAX, Math.max(MOVE_MULTIPLE_MIN, parsed.moveMultiple))
+            : MOVE_MULTIPLE_DEFAULT,
       }
     }
   } catch {
@@ -123,6 +143,10 @@ export interface UseSignalFiltersResult {
   setMinRelVolume: (minRelVolume: number) => void
   setMinRr: (minRr: number) => void
   setZoneGrade: (zoneGrade: ZoneGradeFilter) => void
+  /** Set the freshness window (clamped to [FRESHNESS_MIN, FRESHNESS_MAX]). */
+  setFreshnessDays: (freshnessDays: number) => void
+  /** Set the Min Move threshold (clamped to [MOVE_MULTIPLE_MIN, MOVE_MULTIPLE_MAX]). */
+  setMoveMultiple: (moveMultiple: number) => void
   clearFilters: () => void
   /** True when any filter differs from the defaults (something is being hidden). */
   isActive: boolean
@@ -172,8 +196,33 @@ export function useSignalFilters(): UseSignalFiltersResult {
     setFilters((f) => ({ ...f, zoneGrade }))
   }, [])
 
+  const setFreshnessDays = useCallback((freshnessDays: number) => {
+    setFilters((f) => ({
+      ...f,
+      freshnessDays: Number.isFinite(freshnessDays)
+        ? Math.min(FRESHNESS_MAX, Math.max(FRESHNESS_MIN, Math.round(freshnessDays)))
+        : f.freshnessDays,
+    }))
+  }, [])
+
+  const setMoveMultiple = useCallback((moveMultiple: number) => {
+    setFilters((f) => ({
+      ...f,
+      moveMultiple: Number.isFinite(moveMultiple)
+        ? Math.min(MOVE_MULTIPLE_MAX, Math.max(MOVE_MULTIPLE_MIN, moveMultiple))
+        : f.moveMultiple,
+    }))
+  }, [])
+
   const clearFilters = useCallback(() => {
-    setFilters({ ...DEFAULT_FILTERS })
+    // Freshness + Min Move are remembered thresholds, not "hide" filters —
+    // preserve them so clearing the display filters doesn't reset the user's
+    // chosen scan window/sensitivity.
+    setFilters((f) => ({
+      ...DEFAULT_FILTERS,
+      freshnessDays: f.freshnessDays,
+      moveMultiple: f.moveMultiple,
+    }))
   }, [])
 
   const isActive =
@@ -192,6 +241,8 @@ export function useSignalFilters(): UseSignalFiltersResult {
     setMinRelVolume,
     setMinRr,
     setZoneGrade,
+    setFreshnessDays,
+    setMoveMultiple,
     clearFilters,
     isActive,
   }
@@ -227,4 +278,42 @@ export function matchesFilters(
   if (filters.minRr > 0 && (zone.rr == null || zone.rr < filters.minRr)) return false
 
   return true
+}
+
+/**
+ * Persisted Signals-page UI preference: whether the filter controls panel is
+ * expanded. Collapsed by default so the signals table is reachable without
+ * scrolling past the (usually untouched) filter controls. Remembers the user's
+ * choice across refreshes, matching the filter-persistence idiom above.
+ */
+export function useSignalsFilterPanel(): {
+  open: boolean
+  toggle: () => void
+  setOpen: (open: boolean) => void
+} {
+  const [open, setOpenState] = useState<boolean>(() => {
+    try {
+      const raw = localStorage.getItem(UI_STORAGE_KEY)
+      if (raw) {
+        const parsed = JSON.parse(raw) as { filtersOpen?: boolean }
+        if (typeof parsed.filtersOpen === 'boolean') return parsed.filtersOpen
+      }
+    } catch {
+      // fall through to default
+    }
+    return false // collapsed by default
+  })
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(UI_STORAGE_KEY, JSON.stringify({ filtersOpen: open }))
+    } catch {
+      // best-effort
+    }
+  }, [open])
+
+  const toggle = useCallback(() => setOpenState((v) => !v), [])
+  const setOpen = useCallback((next: boolean) => setOpenState(next), [])
+
+  return { open, toggle, setOpen }
 }

@@ -63,6 +63,15 @@ const STORAGE_KEY = 'rally.backtest.v1'
 /** Default starting portfolio budget. */
 export const DEFAULT_BUDGET = 25_000
 
+/**
+ * Maximum number of concurrent positions (open + pending COMBINED). Capped to
+ * match the Finnhub live-quote ceiling: we can only pull real-time data for
+ * this many tickers, and every open/pending position wants a live mark, so
+ * allowing more positions than we can quote would leave some marked to a stale
+ * daily close. Placing a new order while at the cap is refused.
+ */
+export const MAX_POSITIONS = 25
+
 /** Stop-loss fallback distance from entry when no distal line is known (8%). */
 const DEFAULT_STOP_LOSS_PCT = 0.08
 /** Default reward-to-risk multiple when the caller doesn't specify one (2:1). */
@@ -622,6 +631,14 @@ export function useBacktestPortfolio() {
         created = null
         return s
       }
+      // Enforce the concurrent-position ceiling (open + pending combined). At
+      // the cap, refuse to add — the UI disables submit + explains why, so this
+      // is a defensive backstop rather than the primary gate.
+      if (s.positions.length >= MAX_POSITIONS) {
+        resultId = ''
+        created = null
+        return s
+      }
       editedRef.current = true
       // Pure append: same input state → same output, safe to run twice.
       return { ...s, positions: [candidate as BacktestPosition, ...s.positions] }
@@ -908,6 +925,10 @@ export function useBacktestPortfolio() {
     settleOpen,
     closePosition,
     resetPortfolio,
+    /** Max concurrent positions (open + pending). */
+    maxPositions: MAX_POSITIONS,
+    /** True when at the concurrent-position ceiling — block new orders. */
+    atPositionLimit: positions.length >= MAX_POSITIONS,
     /** Last durable-write failure (null if the last write persisted OK). */
     writeError,
     /** Dismiss the write-error banner. */

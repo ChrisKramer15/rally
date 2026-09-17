@@ -10,7 +10,7 @@ import { formatCurrency, type Stock } from '../data/stocks'
 import { loadCached } from '../data/dailyCache'
 import { atrFromBars, signalRewardRisk, formatRatio, computePortfolioSummary } from '../data/tradeMath'
 import type { useBacktestPortfolio } from '../hooks/useBacktestPortfolio'
-import { useSignalFilters, matchesFilters } from '../hooks/useSignalFilters'
+import { useSignalFilters, matchesFilters, useSignalsFilterPanel } from '../hooks/useSignalFilters'
 import { TickerDetailModal } from './TickerDetailModal'
 
 type Portfolio = ReturnType<typeof useBacktestPortfolio>
@@ -31,12 +31,14 @@ function signedCurrency(n: number): string {
 }
 
 /**
- * Account summary: a headline tier (what the account is worth + performance)
- * over a breakdown tier (where the money sits — available / invested / pending
- * limit orders — which sums back to the budget at cost). Shared shape with the
- * Backtest header via computePortfolioSummary.
+ * Compact account strip for the Signals page. Signals is a scan/to-do list, not
+ * the portfolio view — the full breakdown (available / invested / pending /
+ * realized) lives on the Backtest page header via the same
+ * computePortfolioSummary. Here we show just the essentials on one line: total
+ * value, total P/L (with %), and a light open/realized split — so the account
+ * stays glanceable without dominating the page.
  */
-function PortfolioBar({
+function PortfolioStrip({
   summary,
   budget,
 }: {
@@ -45,54 +47,28 @@ function PortfolioBar({
 }) {
   const totalPct = budget > 0 ? (summary.totalPnl / budget) * 100 : 0
   const totalUp = summary.totalPnl >= 0
-  const openUp = summary.openPnl >= 0
-  const realizedUp = summary.realizedPnl >= 0
 
   return (
-    <div className="panel em-portfolio">
-      {/* Headline: worth + lifetime performance */}
-      <div className="em-pf-headline">
-        <div className="em-pf-hero">
-          <span className="em-pf-label">Total value</span>
-          <span className="em-pf-hero-val">${formatCurrency(summary.totalValue)}</span>
-          <span className="em-pf-sub">Budget ${formatCurrency(budget)}</span>
-        </div>
-        <div className="em-pf-hero">
-          <span className="em-pf-label">Total P/L</span>
-          <span className={`em-pf-hero-val ${totalUp ? 'up' : 'down'}`}>
-            {signedCurrency(summary.totalPnl)}
-          </span>
-          <span className={`em-pf-sub ${totalUp ? 'up' : 'down'}`}>
-            {totalUp ? '+' : ''}{totalPct.toFixed(2)}% · open {signedCurrency(summary.openPnl)} · realized {signedCurrency(summary.realizedPnl)}
-          </span>
-        </div>
+    <div className="panel em-pf-strip">
+      <div className="em-pf-strip-item">
+        <span className="em-pf-strip-label">Value</span>
+        <span className="em-pf-strip-val">${formatCurrency(summary.totalValue)}</span>
       </div>
-
-      {/* Breakdown: where the money is (sums to budget at cost) */}
-      <div className="em-pf-breakdown">
-        <div className="em-pf-metric">
-          <span className="em-pf-label">Available</span>
-          <span className="em-pf-val em-pf-available">${formatCurrency(summary.available)}</span>
-        </div>
-        <div className="em-pf-metric">
-          <span className="em-pf-label">Invested</span>
-          <span className="em-pf-val">${formatCurrency(summary.invested)}</span>
-          <span className="em-pf-count">{summary.openCount} position{summary.openCount === 1 ? '' : 's'}</span>
-        </div>
-        <div className="em-pf-metric">
-          <span className="em-pf-label">Limit orders</span>
-          <span className="em-pf-val">${formatCurrency(summary.reserved)}</span>
-          <span className="em-pf-count">{summary.pendingCount} pending</span>
-        </div>
-        <div className="em-pf-metric">
-          <span className="em-pf-label">Open P/L</span>
-          <span className={`em-pf-val ${openUp ? 'up' : 'down'}`}>{signedCurrency(summary.openPnl)}</span>
-        </div>
-        <div className="em-pf-metric">
-          <span className="em-pf-label">Realized P/L</span>
-          <span className={`em-pf-val ${realizedUp ? 'up' : 'down'}`}>{signedCurrency(summary.realizedPnl)}</span>
-          <span className="em-pf-count">{summary.closedCount} closed</span>
-        </div>
+      <span className="em-pf-strip-sep" aria-hidden="true" />
+      <div className="em-pf-strip-item">
+        <span className="em-pf-strip-label">Total P/L</span>
+        <span className={`em-pf-strip-val ${totalUp ? 'up' : 'down'}`}>
+          {signedCurrency(summary.totalPnl)} <span className="em-pf-strip-pct">({totalUp ? '+' : ''}{totalPct.toFixed(2)}%)</span>
+        </span>
+      </div>
+      <span className="em-pf-strip-sep" aria-hidden="true" />
+      <div className="em-pf-strip-item em-pf-strip-muted">
+        <span className="em-pf-strip-label">Open / Realized</span>
+        <span className="em-pf-strip-val">
+          <span className={summary.openPnl >= 0 ? 'up' : 'down'}>{signedCurrency(summary.openPnl)}</span>
+          {' · '}
+          <span className={summary.realizedPnl >= 0 ? 'up' : 'down'}>{signedCurrency(summary.realizedPnl)}</span>
+        </span>
       </div>
     </div>
   )
@@ -168,10 +144,13 @@ function MoveBar({ move }: { move: ExplosiveMove }) {
 
 function MoveRow({
   move,
+  currentPrice,
   rr,
   onSelect,
 }: {
   move: ExplosiveMove
+  /** Latest daily close for the symbol (the current price shown as the headline). */
+  currentPrice: number | null
   /** Reward:risk if traded at the zone's proximal line (null if not measurable). */
   rr: number | null
   onSelect: (symbol: string) => void
@@ -207,9 +186,13 @@ function MoveRow({
         <MoveBar move={move} />
       </div>
 
-      {/* Price */}
+      {/* Price — current (latest daily close) as the headline, with the
+          explosive-candle close underneath as signal-origin context. */}
       <div className="em-col-num" data-label="Price">
-        <span className="em-price">${formatCurrency(latest.close)}</span>
+        <span className="em-price">${formatCurrency(currentPrice ?? latest.close)}</span>
+        <span className="em-signal-price" title="Close on the explosive-move (signal) day">
+          signal @ ${formatCurrency(latest.close)}
+        </span>
       </div>
 
       {/* Change % */}
@@ -290,12 +273,7 @@ function MoveRow({
 }
 
 export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: ExplosiveMovesProps) {
-  const [moveMultiple, setMoveMultiple] = useState(2)
-  const [freshnessDays, setFreshnessDays] = useState(10)
-  // Raw text mirror of the freshness box so the field always displays exactly
-  // what's typed. Without this, typing e.g. "010" stays stuck: Number("010")
-  // === 10 === current state, so no re-render fires and the DOM keeps the "0".
-  const [freshnessText, setFreshnessText] = useState('10')
+
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
   // Traded signals are hidden by default so the list stays a to-do of things
   // you haven't acted on yet. Flip this to review the ones you've already taken.
@@ -311,9 +289,27 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
     setMinRelVolume,
     setMinRr,
     setZoneGrade,
+    setFreshnessDays,
+    setMoveMultiple,
     clearFilters,
     isActive: filtersActive,
   } = useSignalFilters()
+
+  // Filter controls are collapsed by default (persisted) so the signals table
+  // is reachable without scrolling past the controls.
+  const { open: filtersOpen, toggle: toggleFilters } = useSignalsFilterPanel()
+
+  // Freshness window and Min Move are PERSISTED preferences (see
+  // useSignalFilters): they stick to the last value used, even across refreshes,
+  // and aren't wiped by "Clear filters".
+  const freshnessDays = filters.freshnessDays
+  const moveMultiple = filters.moveMultiple
+
+  // Raw text mirror of the freshness box so the field always displays exactly
+  // what's typed. Without this, typing e.g. "010" stays stuck: Number("010")
+  // === 10 === current state, so no re-render fires and the DOM keeps the "0".
+  // Seeded from the persisted value so a refresh shows the remembered window.
+  const [freshnessText, setFreshnessText] = useState(String(filters.freshnessDays))
 
   const { moves: allMoves, skippedCount, uncachedCount } = useExplosiveMoves(
     stocks,
@@ -483,8 +479,12 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
 
   return (
     <div className="em-page">
-      {/* ── Page header ── */}
-      <div className="em-header panel">
+      {/* ── Page header + filter controls — the whole block is collapsible and
+          collapsed by default, so the page opens straight onto the signals bar
+          and table. The title/subtitle read as context for the controls, so
+          they live here with them. ── */}
+      {filtersOpen && (
+      <div className="em-header panel" id="em-filter-panel">
         <div className="em-header-left">
           <h2>Explosive Moves</h2>
           <p className="em-subtitle">
@@ -494,7 +494,7 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
           </p>
         </div>
 
-        {/* Threshold control */}
+        {/* Threshold + display filter controls. */}
         <div className="em-controls">
           <label className="em-control">
             <span className="em-control-label">Min Move</span>
@@ -526,8 +526,9 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
                   const raw = e.target.value
                   setFreshnessText(raw)
                   const n = Number(raw)
+                  // The hook clamps to [1, 120]; only push through real numbers.
                   if (raw !== '' && Number.isFinite(n)) {
-                    setFreshnessDays(Math.min(120, Math.max(1, Math.round(n))))
+                    setFreshnessDays(n)
                   }
                 }}
                 onBlur={() => {
@@ -661,8 +662,13 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
             </button>
           )}
         </div>
+      </div>
+      )}
 
-        {/* Summary */}
+      {/* ── Signals bar: always-visible counts (acts as the table header) plus
+          the Filters toggle. Keeps the at-a-glance tally on screen while the
+          filter controls collapse away. ── */}
+      <div className="em-signals-bar panel">
         <div className="em-summary">
           <div className="em-summary-row">
             <span className="em-count">{moves.length}</span>
@@ -720,10 +726,24 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
             </span>
           )}
         </div>
+
+        <button
+          type="button"
+          className={`em-filters-toggle ${filtersOpen ? 'is-open' : ''}`}
+          onClick={toggleFilters}
+          aria-expanded={filtersOpen}
+          aria-controls="em-filter-panel"
+        >
+          <span className="em-filters-toggle-caret" aria-hidden="true">{filtersOpen ? '▾' : '▸'}</span>
+          Filters
+          {filtersActive && !filtersOpen && (
+            <span className="em-filters-active-dot" title="Filters are active" aria-label="filters active" />
+          )}
+        </button>
       </div>
 
-      {/* ── Portfolio summary ── */}
-      <PortfolioBar summary={summary} budget={portfolio.budget} />
+      {/* ── Portfolio summary (compact strip; full breakdown lives on Backtest) ── */}
+      <PortfolioStrip summary={summary} budget={portfolio.budget} />
 
       {/* ── Table ── */}
       <div className="panel em-table-panel">
@@ -766,6 +786,7 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
               <MoveRow
                 key={m.symbol}
                 move={m}
+                currentPrice={priceBySymbol.get(m.symbol) ?? null}
                 rr={rrBySymbol.get(m.symbol) ?? null}
                 onSelect={setSelectedSymbol}
               />

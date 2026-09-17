@@ -194,3 +194,21 @@ export function formatEasternDateTime(d: Date): string {
   }).format(d)
   return `${parts} ET`
 }
+
+/**
+ * Whether the US regular session is currently open (Mon–Fri, 09:30–16:00 ET).
+ *
+ * Used by the live-quote scheduler to poll Finnhub only during regular trading
+ * hours and idle otherwise (off-hours the last daily close is the best mark).
+ * Like the rest of this module it intentionally ignores holidays/half-days — on
+ * a holiday it may report "open" but Finnhub simply returns a stale/last quote,
+ * which is a harmless over-poll, not a correctness bug.
+ */
+export function isRegularSessionOpen(now: Date = new Date()): boolean {
+  const et = etPartsOf(now)
+  if (isWeekend(et.weekday)) return false
+  const minutes = et.hour * 60 + et.minute
+  const OPEN = 9 * 60 + 30 // 09:30 ET
+  const CLOSE = 16 * 60 // 16:00 ET
+  return minutes >= OPEN && minutes < CLOSE
+}
