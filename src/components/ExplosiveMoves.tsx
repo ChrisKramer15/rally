@@ -5,7 +5,7 @@ import {
   type ExplosiveMove,
   type ExplosiveGrade,
 } from '../hooks/useExplosiveMoves'
-import { useBasingZones, selectSignalZone, type BasingZone } from '../hooks/useBasingZones'
+import { useBasingZones, selectSignalZone, zoneUsedUpAtPrice, type BasingZone } from '../hooks/useBasingZones'
 import { formatCurrency, type Stock } from '../data/stocks'
 import { loadCached } from '../data/dailyCache'
 import { atrFromBars, signalRewardRisk, formatRatio, computePortfolioSummary } from '../data/tradeMath'
@@ -394,11 +394,16 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
       allMoves.filter((m) => {
         if (!m.latest.isFresh) return false
         const zone = zoneBySymbol.get(m.symbol)
+        // No zone, or already mitigated on the DAILY bars, or already traded
+        // through by the CURRENT price (intraday, before a daily bar has
+        // recorded the touch) — in every case the fresh first-touch entry is
+        // gone, so it's not a tradeable signal.
         if (zone == null || zone.mitigated) return false
+        if (zoneUsedUpAtPrice(zone, priceBySymbol.get(m.symbol))) return false
         if (!showTraded && isTraded(m.symbol)) return false
         return true
       }),
-    [allMoves, zoneBySymbol, showTraded, isTraded],
+    [allMoves, zoneBySymbol, priceBySymbol, showTraded, isTraded],
   )
 
   // Reward:risk per actionable signal, computed from its zone at the proximal
@@ -465,7 +470,7 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
   const noFreshZoneHidden = allMoves.filter((m) => {
     if (!m.latest.isFresh) return false
     const zone = zoneBySymbol.get(m.symbol)
-    return zone == null || zone.mitigated
+    return zone == null || zone.mitigated || zoneUsedUpAtPrice(zone, priceBySymbol.get(m.symbol))
   }).length
   // Fresh, tradeable signals suppressed only because you've already traded them.
   // Counted independently of `showTraded` so the tally reflects how many exist,
@@ -474,6 +479,7 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
     if (!m.latest.isFresh) return false
     const zone = zoneBySymbol.get(m.symbol)
     if (zone == null || zone.mitigated) return false
+    if (zoneUsedUpAtPrice(zone, priceBySymbol.get(m.symbol))) return false
     return isTraded(m.symbol)
   }).length
 

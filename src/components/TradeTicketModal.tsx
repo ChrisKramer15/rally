@@ -167,8 +167,21 @@ export function TradeTicketModal({
   // total portfolio value.
   const riskAmount = preview ? shares * Math.abs(entry - preview.stop) : null
 
+  // A limit entry is a PULLBACK to the proximal: a long waits for price to drop
+  // TO the limit, a short waits for it to rise TO the limit. If the current
+  // price is already on the far side of the limit, that pullback has already
+  // happened (or overshot) — the zone's fresh first-touch entry is used up. The
+  // server settler would fill such an order at the limit and, because price has
+  // already moved past it, very likely stop it out on the same run (the
+  // "instantly filled and closed" case). Block it and explain why.
+  const limitAlreadyCrossed = useMemo(() => {
+    if (orderType !== 'limit' || !(limitPrice > 0) || !(price > 0)) return false
+    return side === 'long' ? price <= limitPrice : price >= limitPrice
+  }, [orderType, side, limitPrice, price])
+
   const canSubmit =
     !atCapacity &&
+    !limitAlreadyCrossed &&
     shares >= 1 &&
     (orderType === 'market' || (orderType === 'limit' && limitPrice > 0))
 
@@ -355,6 +368,16 @@ export function TradeTicketModal({
             Position limit reached{maxPositions ? ` (${maxPositions}/${maxPositions})` : ''}. Close or
             cancel an existing position before placing a new one — live pricing is capped to this many
             tickers.
+          </p>
+        )}
+
+        {/* ── Zone-used-up notice: price has already traded through the limit ── */}
+        {limitAlreadyCrossed && !atCapacity && (
+          <p className="tt-capacity-notice" role="alert">
+            {symbol} is already {side === 'long' ? 'at or below' : 'at or above'} your ${formatCurrency(limitPrice)} limit
+            (last ${formatCurrency(price)}). Price has already traded through the zone, so this order would fill
+            immediately and likely stop out on the same tick. The fresh first-touch entry is gone — wait for a new
+            zone, or place a market order if you still want in.
           </p>
         )}
 

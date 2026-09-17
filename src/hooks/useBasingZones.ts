@@ -486,6 +486,29 @@ export function selectSignalZone(
   })
 }
 
+/**
+ * Live-price counterpart to a zone's `mitigated` flag: is the fresh first-touch
+ * entry already gone because CURRENT price has traded through the proximal
+ * (entry) line?
+ *
+ * `mitigated` is computed from completed DAILY bars (Tiingo, end-of-day), so a
+ * zone price blew through intraday TODAY still reads as fresh until tomorrow's
+ * daily bar lands. That stale window is exactly how a used-up zone got offered
+ * as a signal and instantly filled-and-stopped: the limit sat at the proximal,
+ * but live price was already past it (and past the stop). Checking the live
+ * price closes that gap immediately.
+ *
+ *   demand (long)  → used up once price <= proximal (dropped to/through entry)
+ *   supply (short) → used up once price >= proximal (rose to/through entry)
+ *
+ * Returns false when no price is available (can't judge — leave the daily-bar
+ * `mitigated` flag to decide), so an unknown price never hides a valid signal.
+ */
+export function zoneUsedUpAtPrice(zone: BasingZone, price?: number | null): boolean {
+  if (price == null || !Number.isFinite(price) || price <= 0) return false
+  return zone.kind === 'demand' ? price <= zone.proximal : price >= zone.proximal
+}
+
 export function useBasingZones(
   stocks: Stock[],
   moveMultiple: number = DEFAULT_MOVE_MULTIPLE,
