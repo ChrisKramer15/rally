@@ -426,6 +426,33 @@ export function useBacktestPortfolio() {
   // user with no trades on screen AND an emptied cache.
   const hydratedRef = useRef(false)
 
+  // Ids of positions the user just deleted/cancelled locally, whose durable
+  // DELETE may not have committed yet. This is a tombstone set: any remote
+  // adoption (mount hydrate OR realtime re-read) filters these ids out, so a
+  // just-deleted row can't be resurrected by a read that raced ahead of its own
+  // DELETE commit (or replica lag). An id is cleared once a remote read comes
+  // back WITHOUT it — proof the delete has definitively landed — after which
+  // legitimate future writes to that id (or settlement updates) flow normally.
+  // Unlike editedRef (a one-shot latch that's never reset), this self-heals, so
+  // it can't permanently block the realtime settlement updates the subscription
+  // exists to deliver.
+  const pendingDeletesRef = useRef<Set<string>>(new Set())
+
+  // Drop tombstoned (locally-deleted, not-yet-confirmed) positions from a remote
+  // snapshot, and clear any tombstone the remote no longer contains (delete
+  // confirmed). Returns the filtered positions to adopt.
+  const reconcilePendingDeletes = useCallback((remotePositions: BacktestPosition[]): BacktestPosition[] => {
+    const tombstones = pendingDeletesRef.current
+    if (tombstones.size === 0) return remotePositions
+    const remoteIds = new Set(remotePositions.map((p) => p.id))
+    for (const id of tombstones) {
+      if (!remoteIds.has(id)) tombstones.delete(id) // delete has landed; stop suppressing
+    }
+    return tombstones.size === 0
+      ? remotePositions
+      : remotePositions.filter((p) => !tombstones.has(p.id))
+  }, [])
+
   // The most recent durable-write failure, surfaced so the UI can warn the user
   // that a trade did NOT persist (instead of the old silent console.warn). Null
   // when the last write succeeded / none has failed yet.
@@ -475,7 +502,7 @@ export function useBacktestPortfolio() {
         setState((prev) => {
           const next: PersistShape = {
             budget: remote.budget ?? prev.budget,
-            positions: remote.positions,
+            positions: reconcilePendingDeletes(remote.positions),
             closed: remote.closed,
           }
           persist(next)
@@ -488,15 +515,16 @@ export function useBacktestPortfolio() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [reconcilePendingDeletes])
 
   // Realtime: the server-side settle-positions Edge Function fills/settles
   // positions on a cron. When it writes to `trades` / `closed_trades`, re-read
   // the portfolio so an open browser reflects the fill/exit live. A server
   // settlement is an authoritative external change, so we adopt it wholesale
-  // (this is why fills/exits appear without a manual refresh). We only skip the
-  // adopt if a LOCAL edit is mid-flight, to avoid a race clobbering it; the next
-  // event (or the debounce) reconciles.
+  // (this is why fills/exits appear without a manual refresh). The one thing we
+  // must NOT re-adopt is a row the user just deleted whose DELETE hasn't
+  // committed yet — reconcilePendingDeletes filters those out until the delete
+  // lands, so a self-triggered event can't resurrect a cancelled order.
   useEffect(() => {
     const unsubscribe = subscribeToTradeUpdates(() => {
       void (async () => {
@@ -505,7 +533,12 @@ export function useBacktestPortfolio() {
         setState((prev) => {
           const next: PersistShape = {
             budget: remote.budget ?? prev.budget,
-            positions: remote.positions,
+            // Filter out rows the user just deleted whose DELETE may not have
+            // committed yet. Our own DELETE fires a postgres_changes event that
+            // re-runs this read; without this guard a read racing ahead of the
+            // commit re-adopts the just-removed row and it reappears on the next
+            // paint / refresh. The tombstone self-clears once the delete lands.
+            positions: reconcilePendingDeletes(remote.positions),
             closed: remote.closed,
           }
           persist(next)
@@ -514,7 +547,7 @@ export function useBacktestPortfolio() {
       })()
     })
     return unsubscribe
-  }, [])
+  }, [reconcilePendingDeletes])
 
   const setBudget = useCallback((next: number) => {
     if (!(Number.isFinite(next) && next >= 0)) return
@@ -736,6 +769,11 @@ export function useBacktestPortfolio() {
     // Sync to Supabase. Always remove the position row; if it was an open
     // position we also bank the closed trade and persist the new budget.
     if (removedId) {
+      // Tombstone the id so any remote read that races the DELETE commit (our
+      // own delete triggers a realtime event that re-reads) can't resurrect the
+      // just-removed row. Cleared automatically once a remote read no longer
+      // contains it — see reconcilePendingDeletes.
+      pendingDeletesRef.current.add(removedId)
       void deleteTradeRemote(removedId)
       if (bankedTrade) {
         void insertClosedTradeRemote(bankedTrade)

@@ -441,8 +441,22 @@ export async function deleteTrade(id: string): Promise<void> {
     reportUnconfigured(`deleteTrade ${id}`)
     return
   }
-  const { error } = await supabase.from('trades').delete().eq('id', id)
-  if (error) logWriteError(`deleteTrade ${id}`, error)
+  // `.select()` returns the rows actually deleted. A DELETE that matches zero
+  // rows (e.g. an RLS policy silently filters it out, or the row is already
+  // gone) returns `error: null` with an empty array — so without this we'd
+  // treat a no-op as success and the row would quietly survive. Surfacing it as
+  // a write error routes it through the same UI banner inserts use.
+  const { data, error } = await supabase.from('trades').delete().eq('id', id).select('id')
+  if (error) {
+    logWriteError(`deleteTrade ${id}`, error)
+    return
+  }
+  if (!data || data.length === 0) {
+    logWriteError(`deleteTrade ${id}`, {
+      message: `Delete removed no rows for id ${id} — the row may be protected by RLS or already gone.`,
+      code: 'NO_ROWS_DELETED',
+    })
+  }
 }
 
 /** Remove several position rows by id (used when settling multiple opens). */
@@ -453,8 +467,21 @@ export async function deleteTrades(ids: string[]): Promise<void> {
     reportUnconfigured('deleteTrades')
     return
   }
-  const { error } = await supabase.from('trades').delete().in('id', ids)
-  if (error) logWriteError('deleteTrades', error)
+  // See deleteTrade: `.select()` lets us detect a delete that removed fewer rows
+  // than requested (RLS filtered some out, or they were already gone) instead of
+  // silently treating a partial/no-op delete as success.
+  const { data, error } = await supabase.from('trades').delete().in('id', ids).select('id')
+  if (error) {
+    logWriteError('deleteTrades', error)
+    return
+  }
+  const removed = data?.length ?? 0
+  if (removed < ids.length) {
+    logWriteError('deleteTrades', {
+      message: `Delete removed ${removed} of ${ids.length} rows — some may be protected by RLS or already gone.`,
+      code: 'NO_ROWS_DELETED',
+    })
+  }
 }
 
 /** Bank a closed trade into `closed_trades`. */
