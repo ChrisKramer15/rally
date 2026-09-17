@@ -22,6 +22,7 @@
 
 import { getSupabase } from './supabaseClient'
 import type { LiveQuote } from './finnhub'
+import type { IntradayPoint } from './intradayBars'
 
 /** Debounce window for coalescing a burst of intraday_quotes writes into one notify. */
 const REALTIME_DEBOUNCE_MS = 1_500
@@ -140,4 +141,52 @@ export function subscribeToQuoteUpdates(onChange: () => void): () => void {
     if (timer !== null) clearTimeout(timer)
     void supabase.removeChannel(channel)
   }
+}
+
+/** Max intraday rows to pull for one symbol's series (safety bound). */
+const SERIES_READ_LIMIT = 6000
+
+/**
+ * Fetch the full intraday price SERIES for one symbol, oldest -> newest.
+ *
+ * Unlike `fetchLatestQuotes` (which collapses to the single newest quote per
+ * symbol), this returns every stored sample so the caller can build hourly/4H
+ * candles via `bucketIntoBars`. Returns [] when Supabase is unconfigured or the
+ * symbol has no stored quotes.
+ *
+ * @param symbol  ticker (case-insensitive; normalized to upper here)
+ * @param sinceIso optional ISO lower bound on quoted_at (e.g. the trade's
+ *                 placed/filled time) so we only chart the trade's own history.
+ */
+export async function fetchIntradaySeries(
+  symbol: string,
+  sinceIso?: string,
+): Promise<IntradayPoint[]> {
+  const supabase = getSupabase()
+  if (!supabase) return []
+
+  let query = supabase
+    .from('intraday_quotes')
+    .select('quoted_at,price')
+    .eq('symbol', symbol.toUpperCase())
+    .order('quoted_at', { ascending: true })
+    .limit(SERIES_READ_LIMIT)
+
+  if (sinceIso) query = query.gte('quoted_at', sinceIso)
+
+  const { data, error } = await query
+  if (error) {
+    console.warn(`intraday_quotes series read for ${symbol} failed: ${error.message}`)
+    return []
+  }
+
+  const out: IntradayPoint[] = []
+  for (const row of (data as { quoted_at: string; price: number | string }[] | null) ?? []) {
+    const price = typeof row.price === 'number' ? row.price : Number(row.price)
+    if (!Number.isFinite(price) || price <= 0) continue
+    const t = new Date(row.quoted_at).getTime()
+    if (!Number.isFinite(t)) continue
+    out.push({ t, price })
+  }
+  return out
 }

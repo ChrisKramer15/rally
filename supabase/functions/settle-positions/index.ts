@@ -50,8 +50,15 @@ const FETCH_CONCURRENCY = 5
  * MAX_SYMBOLS=45 that's 9 batches; a 750ms gap spreads them over ~6s.
  */
 const BATCH_PACING_MS = 750
-/** Prune intraday_quotes rows older than this many hours on each run. */
-const QUOTE_RETENTION_HOURS = 48
+/**
+ * Grace window (hours) for pruning intraday_quotes AFTER a symbol is no longer
+ * actively traded. Rows for a symbol with a live (pending/open) trade are NEVER
+ * pruned — we keep the full intraday history for the entire life of the trade
+ * so the chart can render it. Once the trade closes (its `trades` row is
+ * deleted), the symbol's rows become eligible and are pruned once they age past
+ * this window, leaving a just-closed trade chartable for a few days.
+ */
+const QUOTE_GRACE_HOURS = 72
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -163,15 +170,23 @@ async function fetchQuote(symbol: string, token: string): Promise<Quote | null> 
 /**
  * Best-effort persist of the quotes captured this run into intraday_quotes.
  * Mirrors how the collector treats tiingo_request_log: a logging/write failure
- * here must NEVER break the fill/settle path, so all errors are swallowed. Also
- * best-effort prunes rows older than the retention window to keep the table
- * bounded.
+ * here must NEVER break the fill/settle path, so all errors are swallowed.
+ *
+ * Prune policy (lifecycle-aware): rows for a symbol that is STILL actively
+ * traded (`activeSymbols`) are kept regardless of age, so an open position
+ * retains its full intraday history for the whole life of the trade. Only rows
+ * whose symbol is NOT in the active set are eligible, and only once they age
+ * past QUOTE_GRACE_HOURS — so a just-closed trade stays chartable for a few
+ * days and the table still stays bounded.
+ *
+ * @param activeSymbols UPPERCASE symbols with a live (pending/open) trade this run.
  */
 async function persistQuotes(
   // deno-lint-ignore no-explicit-any
   supabase: any,
   quotes: Map<string, Quote>,
   quotedAtIso: string,
+  activeSymbols: string[],
 ): Promise<void> {
   if (quotes.size === 0) return
   const rows = Array.from(quotes.entries()).map(([symbol, q]) => ({
@@ -188,8 +203,14 @@ async function persistQuotes(
     console.error('intraday_quotes insert failed:', errMessage(e))
   }
   try {
-    const cutoff = new Date(Date.now() - QUOTE_RETENTION_HOURS * 3_600_000).toISOString()
-    await supabase.from('intraday_quotes').delete().lt('quoted_at', cutoff)
+    const cutoff = new Date(Date.now() - QUOTE_GRACE_HOURS * 3_600_000).toISOString()
+    let del = supabase.from('intraday_quotes').delete().lt('quoted_at', cutoff)
+    // Never prune a symbol we're still trading — keep its whole history alive
+    // until the trade closes. `not in (...)` is skipped when nothing is active.
+    if (activeSymbols.length > 0) {
+      del = del.not('symbol', 'in', `(${activeSymbols.join(',')})`)
+    }
+    await del
   } catch {
     // best-effort prune; stale rows only slightly inflate the table.
   }
@@ -323,7 +344,12 @@ Deno.serve(async (req) => {
   // Persist the quotes we just pulled so the browser can read live prices from
   // the DB (no Finnhub call) and we accumulate intraday history. Best-effort —
   // never blocks or fails the fill/settle path below.
-  await persistQuotes(supabase, quoteBySymbol, nowIso)
+  //
+  // The keep-set for the prune is EVERY active symbol from `rows` (not the
+  // MAX_SYMBOLS-capped `symbols`), so even a symbol whose quote fetch was capped
+  // this run still has its history protected while the trade is live.
+  const activeSymbols = Array.from(new Set(rows.map((r) => r.symbol.toUpperCase())))
+  await persistQuotes(supabase, quoteBySymbol, nowIso, activeSymbols)
 
   // ── 3) Fill pending limits + 4) settle open positions ─────────────────────
   const toUpdateTrades: Record<string, unknown>[] = []
