@@ -351,11 +351,13 @@ describe('explosive-bar-discrepancy — Property 1 (Expected Behavior after fix)
     expect(signal.displayedRowDate).toBe(signal.zoneExplosiveDate)
   })
 
-  it('Case 2 — Nearest-to-price older zone wins: row date === that zone explosiveDate', () => {
+  it('Case 2 — Two fresh zones, recency wins: row date === most-recent zone explosiveDate', () => {
     localStorage.clear()
     const symbol = 'BUGTWO'
-    // Two fresh unmitigated zones. Put current price NEAR the older zone's
-    // proximal so selectSignalZone picks the older, nearer zone over the newer.
+    // Two fresh unmitigated zones. The corrected selectSignalZone ranks by
+    // RECENCY FIRST (a valid recent zone must not be overridden by a nearer
+    // stale one), so the more-recent zone is selected even though the older
+    // zone's proximal sits closer to some prices.
     const bars = buildBars({
       base: 100,
       firstExplosiveDaysAgo: 7,
@@ -367,16 +369,21 @@ describe('explosive-bar-discrepancy — Property 1 (Expected Behavior after fix)
     saveSymbol(symbol, bars, symbol)
 
     // Older zone anchors around ~100 (base level); newer zone anchors higher
-    // (~108+). Price near the older proximal makes it the nearest.
-    const price = 100.5
+    // (~108+). Price sits above the newer proximal so the newer demand zone is
+    // still actionable (not used up) and remains the recency-first pick.
+    const price = 109
     const listed = runSignals([stockFor(symbol, price)])
     const signal = listed.find((s) => s.symbol === symbol)
     expect(signal, 'symbol should be listed as an actionable signal').toBeTruthy()
     if (!signal) return
 
-    expect(isBugCondition(signal)).toBe(true)
+    // Recency-first: the selected zone is the MOST RECENT explosive (2 days ago),
+    // which also matches the scan's move.latest — a valid, non-divergent signal.
+    expect(signal.zoneExplosiveDate).toBe(daysAgo(2))
+    expect(signal.zoneExplosiveDate).toBe(signal.move.latest.date)
 
-    // EXPECTED: row date follows the nearer zone selected by selectSignalZone.
+    // Invariant preserved: the displayed row date always follows the selected
+    // zone's explosiveDate.
     expect(signal.displayedRowDate).toBe(signal.zoneExplosiveDate)
   })
 

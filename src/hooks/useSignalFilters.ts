@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 
 /**
  * User-controlled filters for the Signals (Explosive Moves) page.
@@ -135,6 +135,115 @@ function persist(filters: SignalFilters): void {
   }
 }
 
+/**
+ * Module-level store backing `useSignalFilters`.
+ *
+ * The Signals filters are session-shared: every live `useSignalFilters()`
+ * consumer (the Signals page in ExplosiveMoves.tsx and the trade-ticket zone
+ * selection in App.tsx) reads and writes the SAME in-memory state, so a change
+ * in one is reflected in the other immediately (no reload needed). We expose it
+ * to React via `useSyncExternalStore`.
+ *
+ * `currentFilters` is loaded lazily once from localStorage and is only ever
+ * REPLACED (never mutated in place) inside `setFiltersState`. That keeps the
+ * `getSnapshot` reference stable between changes, which is what
+ * `useSyncExternalStore` requires to avoid an infinite render loop.
+ */
+let currentFilters: SignalFilters = loadFilters()
+const listeners = new Set<() => void>()
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener)
+  return () => {
+    listeners.delete(listener)
+  }
+}
+
+function getSnapshot(): SignalFilters {
+  return currentFilters
+}
+
+/**
+ * Apply an updater to the shared filter state. Only when the updater returns a
+ * different object do we swap `currentFilters`, persist, and notify listeners.
+ * The updaters below always build a fresh object (as before), so a real change
+ * always propagates; the reference stays stable between changes.
+ */
+function setFiltersState(updater: (prev: SignalFilters) => SignalFilters): void {
+  const next = updater(currentFilters)
+  if (next === currentFilters) return
+  currentFilters = next
+  persist(next)
+  listeners.forEach((listener) => listener())
+}
+
+// Setter functions are defined once at module scope so the object returned by
+// `useSignalFilters` has referentially-stable setters across renders/consumers.
+// Their clamping/validation logic is identical to the previous per-call
+// `useCallback` versions.
+
+function setGrade(grade: GradeFilter): void {
+  setFiltersState((f) => ({ ...f, grade }))
+}
+
+function setDirection(direction: DirectionFilter): void {
+  setFiltersState((f) => ({ ...f, direction }))
+}
+
+function setMinAtr(minAtr: number): void {
+  setFiltersState((f) => ({
+    ...f,
+    minAtr: Number.isFinite(minAtr) && minAtr >= 0 ? minAtr : 0,
+  }))
+}
+
+function setMinRelVolume(minRelVolume: number): void {
+  setFiltersState((f) => ({
+    ...f,
+    minRelVolume: Number.isFinite(minRelVolume) && minRelVolume >= 0 ? minRelVolume : 0,
+  }))
+}
+
+function setMinRr(minRr: number): void {
+  setFiltersState((f) => ({
+    ...f,
+    minRr: Number.isFinite(minRr) && minRr >= 0 ? minRr : 0,
+  }))
+}
+
+function setZoneGrade(zoneGrade: ZoneGradeFilter): void {
+  setFiltersState((f) => ({ ...f, zoneGrade }))
+}
+
+function setFreshnessDays(freshnessDays: number): void {
+  setFiltersState((f) => ({
+    ...f,
+    freshnessDays: Number.isFinite(freshnessDays)
+      ? Math.min(FRESHNESS_MAX, Math.max(FRESHNESS_MIN, Math.round(freshnessDays)))
+      : f.freshnessDays,
+  }))
+}
+
+function setMoveMultiple(moveMultiple: number): void {
+  setFiltersState((f) => ({
+    ...f,
+    moveMultiple: Number.isFinite(moveMultiple)
+      ? Math.min(MOVE_MULTIPLE_MAX, Math.max(MOVE_MULTIPLE_MIN, moveMultiple))
+      : f.moveMultiple,
+  }))
+}
+
+function clearFilters(): void {
+  // Freshness + Min Move are remembered thresholds, not "hide" filters —
+  // preserve them so clearing the display filters doesn't reset the user's
+  // chosen scan window/sensitivity.
+  setFiltersState((f) => ({
+    ...DEFAULT_FILTERS,
+    freshnessDays: f.freshnessDays,
+    moveMultiple: f.moveMultiple,
+  }))
+}
+
 export interface UseSignalFiltersResult {
   filters: SignalFilters
   setGrade: (grade: GradeFilter) => void
@@ -157,73 +266,11 @@ export interface UseSignalFiltersResult {
  * user changes them or hits "Clear filters", surviving app restarts.
  */
 export function useSignalFilters(): UseSignalFiltersResult {
-  const [filters, setFilters] = useState<SignalFilters>(loadFilters)
-
-  useEffect(() => {
-    persist(filters)
-  }, [filters])
-
-  const setGrade = useCallback((grade: GradeFilter) => {
-    setFilters((f) => ({ ...f, grade }))
-  }, [])
-
-  const setDirection = useCallback((direction: DirectionFilter) => {
-    setFilters((f) => ({ ...f, direction }))
-  }, [])
-
-  const setMinAtr = useCallback((minAtr: number) => {
-    setFilters((f) => ({
-      ...f,
-      minAtr: Number.isFinite(minAtr) && minAtr >= 0 ? minAtr : 0,
-    }))
-  }, [])
-
-  const setMinRelVolume = useCallback((minRelVolume: number) => {
-    setFilters((f) => ({
-      ...f,
-      minRelVolume: Number.isFinite(minRelVolume) && minRelVolume >= 0 ? minRelVolume : 0,
-    }))
-  }, [])
-
-  const setMinRr = useCallback((minRr: number) => {
-    setFilters((f) => ({
-      ...f,
-      minRr: Number.isFinite(minRr) && minRr >= 0 ? minRr : 0,
-    }))
-  }, [])
-
-  const setZoneGrade = useCallback((zoneGrade: ZoneGradeFilter) => {
-    setFilters((f) => ({ ...f, zoneGrade }))
-  }, [])
-
-  const setFreshnessDays = useCallback((freshnessDays: number) => {
-    setFilters((f) => ({
-      ...f,
-      freshnessDays: Number.isFinite(freshnessDays)
-        ? Math.min(FRESHNESS_MAX, Math.max(FRESHNESS_MIN, Math.round(freshnessDays)))
-        : f.freshnessDays,
-    }))
-  }, [])
-
-  const setMoveMultiple = useCallback((moveMultiple: number) => {
-    setFilters((f) => ({
-      ...f,
-      moveMultiple: Number.isFinite(moveMultiple)
-        ? Math.min(MOVE_MULTIPLE_MAX, Math.max(MOVE_MULTIPLE_MIN, moveMultiple))
-        : f.moveMultiple,
-    }))
-  }, [])
-
-  const clearFilters = useCallback(() => {
-    // Freshness + Min Move are remembered thresholds, not "hide" filters —
-    // preserve them so clearing the display filters doesn't reset the user's
-    // chosen scan window/sensitivity.
-    setFilters((f) => ({
-      ...DEFAULT_FILTERS,
-      freshnessDays: f.freshnessDays,
-      moveMultiple: f.moveMultiple,
-    }))
-  }, [])
+  // Subscribe to the shared module-level store. Passing `getSnapshot` as the
+  // server snapshot too keeps this SSR-safe (this app is client-only/Vite, but
+  // it avoids any hydration-mismatch warning) and returns the same stable
+  // reference the client snapshot does.
+  const filters = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 
   const isActive =
     filters.grade !== DEFAULT_FILTERS.grade ||

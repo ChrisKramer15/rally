@@ -7,6 +7,7 @@ import { formatEasternTime } from './data/marketCalendar'
 import { detectBasesForBars, selectSignalZone, type ZoneGrade, type ZoneKind } from './hooks/useBasingZones'
 import { gradeExplosiveAt, type ExplosiveGrade } from './hooks/useExplosiveMoves'
 import { useIndexMarket } from './hooks/useIndexMarket'
+import { useSignalFilters } from './hooks/useSignalFilters'
 import { useWatchlist } from './hooks/useWatchlist'
 import { useWatchlistMarket } from './hooks/useWatchlistMarket'
 import { IndexCard } from './components/IndexCard'
@@ -52,6 +53,10 @@ function App() {
 
   // Paper-trading portfolio for the Backtest page (persisted to localStorage).
   const portfolio = useBacktestPortfolio()
+
+  // Persisted Signals freshness window — shared source of truth with the Signals
+  // page so the trade ticket seeds from the SAME zone the Signals row shows.
+  const { filters: signalFilters } = useSignalFilters()
 
   // ── Near-real-time (Finnhub) live quotes ────────────────────────────────
   // Tiingo daily closes remain the source of truth for the homepage, watchlist,
@@ -135,7 +140,7 @@ function App() {
     // Seed the ticket from the SAME zone the Signals row represents: the best
     // fresh (unmitigated) zone nearest to current price, not blindly the newest
     // one. Uses the shared selectSignalZone helper so the row and ticket agree.
-    const latest = selectSignalZone(zones, tradeStock?.price)
+    const latest = selectSignalZone(zones, tradeStock?.price, signalFilters.freshnessDays)
     if (!latest) return null
     return {
       proximal: latest.proximal,
@@ -148,7 +153,7 @@ function App() {
       strength: gradeExplosiveAt(cached.bars, latest.explosiveDate) ?? undefined,
       signalDate: latest.explosiveDate,
     }
-  }, [tradeSymbol, tradeStock?.price])
+  }, [tradeSymbol, tradeStock?.price, signalFilters.freshnessDays])
 
   // Place the order from the ticket, then jump to the Backtest page.
   const handleSubmitTicket = (ticket: TradeTicket) => {

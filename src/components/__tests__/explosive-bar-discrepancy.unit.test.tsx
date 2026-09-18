@@ -34,6 +34,7 @@ import {
 import {
   useBasingZones,
   selectSignalZone,
+  zoneUsedUpAtPrice,
   type BasingZone,
 } from '../../hooks/useBasingZones'
 import { saveSymbol, loadCached } from '../../data/dailyCache'
@@ -160,6 +161,74 @@ function buildDivergentBars(opts: {
       const low = close * 0.999
       bar = { date, open, high, low, close, volume: 3_000_000 }
       level = preMove * 1.02
+    } else {
+      const open = level
+      const close = level * (1 + (d % 2 === 0 ? 0.0005 : -0.0005))
+      const high = Math.max(open, close) + RANGE / 2
+      const low = Math.min(open, close) - RANGE / 2
+      bar = { date, open, high, low, close, volume: 1_000_000 }
+      level = close
+    }
+    bars.push(bar)
+  }
+  return bars
+}
+
+/**
+ * Stale-out-of-window-zone leak scenario (the reported bug).
+ *
+ * Layout (oldest → newest):
+ *   • Long calm warm-up establishing a stable ATR.
+ *   • An OLDER explosive up-candle well OUTSIDE a 30-day window (~60d ago) that
+ *     IS preceded by a tight base → forms a valid, UNMITIGATED demand zone.
+ *   • Calm drift after it (price never dips back to that old proximal → the old
+ *     zone stays unmitigated).
+ *   • A short, violent run-up in the few days right before the recent candle.
+ *     Each run-up bar's range exceeds PRIOR_MOVE_RANGE_MULT × ATR, so when
+ *     detectBase walks back from the recent explosive candle the very first
+ *     prior candle breaks the base loop immediately → candleCount === 0 →
+ *     detectBase returns null. The recent candle is a bare move (support/
+ *     resistance), NOT a tradeable zone.
+ *   • A RECENT explosive up-candle IN-WINDOW (~5d ago) sitting on top of that
+ *     run-up → qualifies as an explosive move (isFresh) but forms NO zone.
+ *
+ * Result: zones for the symbol contain ONLY the old out-of-window zone; the
+ * recent in-window candle contributes none. This is the exact bug report.
+ */
+function buildStaleZoneLeakBars(opts: {
+  base: number
+  olderDaysAgo: number
+  recentDaysAgo: number
+}): DailyBar[] {
+  const bars: DailyBar[] = []
+  const { base, olderDaysAgo, recentDaysAgo } = opts
+  const startDaysAgo = olderDaysAgo + 40
+  let level = base
+  const RANGE = base * 0.004
+  // The run-up occupies the 3 days immediately before the recent explosive
+  // candle. Each is a wide-range candle (~4% range) so it exceeds
+  // PRIOR_MOVE_RANGE_MULT × ATR and terminates detectBase's base walk at once.
+  const runUpDays = [recentDaysAgo + 1, recentDaysAgo + 2, recentDaysAgo + 3]
+  for (let d = startDaysAgo; d >= 0; d--) {
+    const date = daysAgo(d)
+    let bar: DailyBar
+    if (d === olderDaysAgo || d === recentDaysAgo) {
+      // Explosive up-candle: tight body, big close-to-close jump.
+      const open = level
+      const close = level * 1.08
+      const high = close * 1.001
+      const low = open * 0.999
+      bar = { date, open, high, low, close, volume: 5_000_000 }
+      level = close
+    } else if (runUpDays.includes(d)) {
+      // Wide-range volatile bar right before the recent candle. Large range
+      // (~4%) blows past the tightness/prior-move envelope so no base forms.
+      const open = level
+      const close = level * 1.02
+      const high = close * 1.02
+      const low = open * 0.98
+      bar = { date, open, high, low, close, volume: 4_000_000 }
+      level = close
     } else {
       const open = level
       const close = level * (1 + (d % 2 === 0 ? 0.0005 : -0.0005))
@@ -504,6 +573,58 @@ describe('explosive-bar-discrepancy — supporting unit tests (Task 4)', () => {
       // The row shows the in-window zone anchor, not the most-recent candle.
       expect(container.querySelector('.em-date')?.textContent).toBe(zone.explosiveDate)
       expect(container.querySelector('.em-date')?.textContent).not.toBe(move.latest.date)
+    })
+
+    // ── Regression: stale out-of-window zone must NOT leak (the reported bug) ──
+    // Scenario built: RECENT in-window explosive candle with NO zone (a violent
+    // run-up right before it makes detectBase reject any base), plus an OLDER
+    // out-of-window explosive candle that DID form a valid unmitigated zone.
+    // Before the fix, selectSignalZone(...,30) fell through to the "all
+    // unmitigated" tier and returned the OLD out-of-window zone, so the symbol
+    // was listed as actionable on a stale date + stale stop/limit. After the
+    // fix, windowed mode returns null when no in-window zone exists.
+    it('windowed selectSignalZone returns null when the only zone is out-of-window (no stale leak)', () => {
+      const symbol = 'STALE_LEAK'
+      const FRESHNESS = 30
+      // Recent explosive ~5d ago (in-window, no zone); older ~60d ago (out of a
+      // 30d window, valid unmitigated zone).
+      const bars = buildStaleZoneLeakBars({ base: 100, olderDaysAgo: 60, recentDaysAgo: 5 })
+      saveSymbol(symbol, bars, symbol)
+      const stock = stockFor(symbol, 118)
+
+      // ── Hook-layer facts (deterministic) ──────────────────────────────────
+      // 1. useBasingZones produces zones that include the OLD out-of-window one,
+      //    and NONE anchored on the recent in-window candle.
+      const { result: zonesResult } = renderHook(() => useBasingZones([stock]))
+      const symbolZones = zonesResult.current.zones.filter((z) => z.symbol === symbol)
+      expect(symbolZones.length).toBeGreaterThan(0)
+
+      const recentExplosiveDate = daysAgo(5)
+      const olderExplosiveDate = daysAgo(60)
+      // The old, out-of-window zone exists and is unmitigated.
+      const oldZone = symbolZones.find((z) => z.explosiveDate === olderExplosiveDate)
+      expect(oldZone, 'old out-of-window zone should be detected').toBeTruthy()
+      expect(oldZone!.mitigated).toBe(false)
+      // The recent in-window candle formed NO zone.
+      expect(symbolZones.some((z) => z.explosiveDate === recentExplosiveDate)).toBe(false)
+
+      // 2. useExplosiveMoves marks the recent candle as fresh (in the window).
+      const move = moveFor(stock, FRESHNESS)!
+      expect(move.latest.date).toBe(recentExplosiveDate)
+      expect(move.latest.isFresh).toBe(true)
+
+      // 3. selectSignalZone in windowed mode returns null — NOT the old zone.
+      const selected = selectSignalZone(symbolZones, stock.price, FRESHNESS)
+      expect(selected).toBeNull()
+
+      // ── Actionability outcome (mirrors ExplosiveMoves.tsx's gate) ──────────
+      const zone = selectSignalZone(symbolZones, stock.price, FRESHNESS)
+      const actionable =
+        move.latest.isFresh &&
+        zone != null &&
+        !zone.mitigated &&
+        !zoneUsedUpAtPrice(zone, stock.price)
+      expect(actionable).toBe(false)
     })
   })
 })

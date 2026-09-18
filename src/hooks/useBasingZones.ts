@@ -21,8 +21,19 @@
 
 import { useMemo } from 'react'
 import { loadCached } from '../data/dailyCache'
+import { effectiveTradingDay } from '../data/marketCalendar'
 import type { Stock } from '../data/stocks'
 import type { DailyBar } from '../data/tiingo'
+
+/** Calendar days between two YYYY-MM-DD dates (b - a), UTC-noon anchored. */
+function calendarDaysBetween(a: string, b: string): number {
+  const [ay, am, ad] = a.split('-').map(Number)
+  const [by, bm, bd] = b.split('-').map(Number)
+  return Math.round((Date.UTC(by, bm - 1, bd, 12) - Date.UTC(ay, am - 1, ad, 12)) / 86_400_000)
+}
+
+/** Default freshness window (calendar days) for selecting an actionable zone. Mirrors useExplosiveMoves. */
+export const DEFAULT_ZONE_FRESHNESS_DAYS = 10
 
 export type ZoneGrade = 'A+' | 'good' | 'weak'
 export type ZoneKind = 'demand' | 'supply'
@@ -455,32 +466,73 @@ const ZONE_GRADE_RANK: Record<ZoneGrade, number> = { 'A+': 0, good: 1, weak: 2 }
  * Choose the single representative zone for a symbol from all its detected
  * zones — the one the Signals row and the trade ticket should both use.
  *
- * Prefers the best FRESH (unmitigated) zone so a still-tradeable level is never
- * hidden behind a newer, already-used one. Ranking among the candidate pool:
- *   1. nearest to `price` (most likely to fill on a daily-timeframe pullback),
- *   2. then most recent explosive date,
- *   3. then stronger grade.
- * If no fresh zone exists, falls back to the same ranking over ALL zones (so a
- * mitigated-only symbol still yields a zone, which downstream code treats as
- * "used up"). Returns null only when `zones` is empty.
+ * Freshness bounding: when `freshnessDays` is provided (strict/windowed mode),
+ * the candidate pool is bounded to zones whose `explosiveDate` is within that
+ * many CALENDAR days of today's effective trading day (and not future-dated).
+ * Candidate precedence picks the FIRST non-empty tier:
+ *   1. in-window AND unmitigated,
+ *   2. in-window (mitigated allowed — downstream still treats mitigated/used-up
+ *      as excluded, but we never jump to an out-of-window zone).
+ * If BOTH tiers are empty (no in-window zone at all), this returns `null`. It
+ * does NOT fall back to out-of-window zones. WHY: a recent explosive candle
+ * that formed no base is just support/resistance, not a tradeable zone; if the
+ * only valid zone is out-of-window, there is no fresh entry to take, so the
+ * symbol has NO actionable zone. Returning the stale out-of-window zone here is
+ * exactly the leak that surfaced symbols with an old date + stale stop/limit,
+ * anchored on a zone whose entry is long gone. The caller's `zone == null`
+ * check then correctly drops the symbol.
  *
- * `price` may be omitted (e.g. price unknown); ranking then starts at rule 2.
+ * When `freshnessDays` is undefined, no windowing is applied (backward
+ * compatible) and the pool is simply the fresh (unmitigated) zones, else all.
+ *
+ * Ranking within the chosen pool (recency leads so a valid recent zone isn't
+ * overridden by a nearer stale one):
+ *   1. most recent explosive date,
+ *   2. then, on equal dates and a known `price`, nearest proximal to `price`
+ *      (most likely to fill on a daily-timeframe pullback),
+ *   3. then stronger grade.
+ * Returns null only when `zones` is empty. `price` may be omitted (e.g. price
+ * unknown); the proximity tiebreak is then skipped.
  */
 export function selectSignalZone(
   zones: BasingZone[],
   price?: number,
+  freshnessDays?: number,
 ): BasingZone | null {
   if (zones.length === 0) return null
-  const fresh = zones.filter((z) => !z.mitigated)
-  const pool = fresh.length > 0 ? fresh : zones
+
+  let pool: BasingZone[]
+  if (freshnessDays === undefined) {
+    // Backward compatible: no windowing. Prefer fresh (unmitigated) zones.
+    const fresh = zones.filter((z) => !z.mitigated)
+    pool = fresh.length > 0 ? fresh : zones
+  } else {
+    const today = effectiveTradingDay()
+    const inWindow = (z: BasingZone): boolean => {
+      const age = calendarDaysBetween(z.explosiveDate, today)
+      return age >= 0 && age <= freshnessDays
+    }
+    const inWindowZones = zones.filter(inWindow)
+    const inWindowUnmitigated = inWindowZones.filter((z) => !z.mitigated)
+    // Strict windowed mode: the candidate pool is IN-WINDOW zones only.
+    //   1. in-window AND unmitigated, else
+    //   2. in-window (mitigated allowed — downstream still excludes those).
+    // If no in-window zone exists at all, there is NO actionable zone: return
+    // null rather than leaking a stale out-of-window zone (the reported bug).
+    const windowedPool =
+      inWindowUnmitigated.length > 0 ? inWindowUnmitigated : inWindowZones
+    if (windowedPool.length === 0) return null
+    pool = windowedPool
+  }
+
   return pool.reduce((a, b) => {
+    if (a.explosiveDate !== b.explosiveDate) {
+      return a.explosiveDate > b.explosiveDate ? a : b
+    }
     if (price != null) {
       const da = Math.abs(a.proximal - price)
       const db = Math.abs(b.proximal - price)
       if (da !== db) return da < db ? a : b
-    }
-    if (a.explosiveDate !== b.explosiveDate) {
-      return a.explosiveDate > b.explosiveDate ? a : b
     }
     return (ZONE_GRADE_RANK[a.grade] ?? 3) <= (ZONE_GRADE_RANK[b.grade] ?? 3) ? a : b
   })

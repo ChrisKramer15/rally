@@ -360,11 +360,11 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
 
     const chosen = new Map<string, BasingZone>()
     for (const [symbol, list] of bySymbol) {
-      const best = selectSignalZone(list, priceBySymbol.get(symbol))
+      const best = selectSignalZone(list, priceBySymbol.get(symbol), freshnessDays)
       if (best) chosen.set(symbol, best)
     }
     return chosen
-  }, [zones, priceBySymbol])
+  }, [zones, priceBySymbol, freshnessDays])
 
   // Signals you've already traded — keyed by symbol + the signal's origin date
   // (the zone's explosive move-away date, stored on each order as `signalDate`).
