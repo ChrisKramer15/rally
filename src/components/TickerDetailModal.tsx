@@ -23,6 +23,14 @@ interface TickerDetailModalProps {
    */
   freshDates?: Set<string>
   /**
+   * The canonical signal date (YYYY-MM-DD) — the explosive candle anchoring the
+   * symbol's selected, actionable supply/demand zone (`zone.explosiveDate`).
+   * When present (signals modal), the chart emphasizes *that one candle* as THE
+   * signal, while other graded candles stay dimmed historical context. When
+   * absent (plain watchlist modal), rendering is unchanged.
+   */
+  signalDate?: string
+  /**
    * When provided, a "Trade" button is shown in the header (used by the signals
    * modal). Receives the symbol so the parent can route it to a broker/order
    * ticket. If omitted, the button defaults to opening the symbol on TradingView.
@@ -103,7 +111,7 @@ function toWeeklyBars(daily: DailyBar[]): DailyBar[] {
 }
 
 // ── Main modal ───────────────────────────────────────────────────────────────
-export function TickerDetailModal({ stock, onClose, explosiveGrades, freshDates, onTrade, showTrade }: TickerDetailModalProps) {
+export function TickerDetailModal({ stock, onClose, explosiveGrades, freshDates, signalDate, onTrade, showTrade }: TickerDetailModalProps) {
   const [bars, setBars] = useState<DailyBar[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -291,6 +299,7 @@ export function TickerDetailModal({ stock, onClose, explosiveGrades, freshDates,
               width={chartWidth}
               explosiveGrades={activeGrades}
               freshDates={freshDates}
+              signalDate={showExplosive ? signalDate : undefined}
               zones={visibleZones}
               selectedDate={selectedBar?.date ?? null}
               onSelectBar={handleSelectBar}
@@ -322,6 +331,13 @@ interface CandleChartProps {
   explosiveGrades?: Map<string, AnyExplosiveGrade>
   /** Dates of fresh explosive candles; graded candles outside this set render dimmed. */
   freshDates?: Set<string>
+  /**
+   * The canonical signal candle date to emphasize as THE signal (the selected
+   * zone's `explosiveDate`). When set, that candle gets an unambiguous marker on
+   * top of its existing grade treatment; all other graded candles stay dimmed
+   * historical context. Absent → no single candle is emphasized (unchanged).
+   */
+  signalDate?: string
   /** Detected basing zones to overlay (already filtered to the visible range). */
   zones?: BasingZone[]
   selectedDate: string | null
@@ -342,7 +358,7 @@ const PAD_R = 52
  */
 const MIN_STEP = 12
 
-function CandleChart({ bars, timeframe, width, explosiveGrades, freshDates, zones, selectedDate, onSelectBar }: CandleChartProps) {
+function CandleChart({ bars, timeframe, width, explosiveGrades, freshDates, signalDate, zones, selectedDate, onSelectBar }: CandleChartProps) {
   const n = bars.length
 
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null)
@@ -669,6 +685,11 @@ function CandleChart({ bars, timeframe, width, explosiveGrades, freshDates, zone
         // but render quietly (no glow, faded outline/icon).
         const isStale     = isExplosive && freshDates !== undefined && !freshDates.has(bar.date)
         const isFreshMark = isExplosive && !isStale
+        // THE signal candle: the one anchoring the selected zone. It gets an
+        // unambiguous marker on top of its normal grade treatment so it reads as
+        // the single "this is the signal" candle amid the dimmed historical
+        // context. Only meaningful when a signalDate is supplied (signals modal).
+        const isSignal    = signalDate !== undefined && bar.date === signalDate
         // Pick the matching soft-glow filter by the grade's palette color.
         const glowFilter  = visual
           ? visual.color === 'var(--neon-orange)'
@@ -696,17 +717,22 @@ function CandleChart({ bars, timeframe, width, explosiveGrades, freshDates, zone
             : color
 
         // Dim everything else when explosives are present OR a candle is selected.
-        const dimmed = (hasAnyExplosive && !isExplosive && !isSelected) ||
-                       (selectedDate !== null && !isSelected)
+        // The canonical signal candle is never dimmed — it stays fully lit so it
+        // reads as THE signal against the dimmed historical context.
+        const dimmed = !isSignal && (
+                       (hasAnyExplosive && !isExplosive && !isSelected) ||
+                       (selectedDate !== null && !isSelected))
         const opacity = dimmed ? 0.3 : (isHovered && !isSelected) ? 0.85 : 0.9
 
         // Fresh graded candles are widened for emphasis; stale ones stay normal
         // width so they blend into the historical context.
-        const candleW = isFreshMark
-          ? Math.max(bodyWidth * 1.5, bodyWidth + 3)
-          : isSelected
-            ? Math.max(bodyWidth * 1.2, bodyWidth + 2)
-            : bodyWidth
+        const candleW = isSignal
+          ? Math.max(bodyWidth * 1.7, bodyWidth + 4)
+          : isFreshMark
+            ? Math.max(bodyWidth * 1.5, bodyWidth + 3)
+            : isSelected
+              ? Math.max(bodyWidth * 1.2, bodyWidth + 2)
+              : bodyWidth
 
         const bodyTop = priceY(Math.max(bar.open, bar.close))
         const bodyBot = priceY(Math.min(bar.open, bar.close))
@@ -724,15 +750,28 @@ function CandleChart({ bars, timeframe, width, explosiveGrades, freshDates, zone
 
         return (
           <g key={bar.date}>
+            {/* THE signal candle — a bright, unambiguous lane box that outshines
+                the historical grade highlights, so the one candle anchoring the
+                selected zone is instantly identifiable. Uses the grade palette
+                color when available, else a neutral cyan emphasis. */}
+            {isSignal && (
+              <rect x={laneX + 0.5} y={PAD_T} width={step - 1} height={priceH}
+                fill={visual ? `rgba(${visual.rgb},0.08)` : 'rgba(34,227,255,0.08)'}
+                stroke={visual ? visual.color : 'var(--neon-cyan)'}
+                strokeWidth={1.75} rx={2}
+                filter={glowFilter} />
+            )}
             {/* Lane highlights — fresh graded candles glow in their palette color;
-                stale ones get a faint outline only (kept for context). */}
-            {visual && isFreshMark && (
+                stale ones get a faint outline only (kept for context). The signal
+                candle already has its own emphasized box above, so skip the
+                regular treatment to avoid double-drawing. */}
+            {visual && isFreshMark && !isSignal && (
               <rect x={laneX + 0.5} y={PAD_T} width={step - 1} height={priceH}
                 fill={`rgba(${visual.rgb},0.03)`} stroke={`rgba(${visual.rgb},0.4)`}
                 strokeWidth={1} rx={2}
                 filter={glowFilter} />
             )}
-            {isStale && visual && (
+            {isStale && visual && !isSignal && (
               <rect x={laneX + 0.5} y={PAD_T} width={step - 1} height={priceH}
                 fill="none"
                 stroke={`rgba(${visual.rgb},0.14)`}
@@ -747,31 +786,55 @@ function CandleChart({ bars, timeframe, width, explosiveGrades, freshDates, zone
                 fill="rgba(200,200,255,0.04)" rx={2} />
             )}
 
-            {/* Candle group — glow only for fresh graded candles */}
-            <g opacity={opacity} filter={isFreshMark ? glowFilter : undefined}>
+            {/* Candle group — glow for fresh graded candles and for THE signal candle */}
+            <g opacity={opacity} filter={isFreshMark || isSignal ? glowFilter : undefined}>
               {/* Wick — grade-colored outline via strokeColor (stale = thin) */}
               <line x1={cx} y1={priceY(bar.high)} x2={cx} y2={priceY(bar.low)}
-                stroke={strokeColor} strokeWidth={isFreshMark ? 2 : isSelected ? 1.5 : 1} />
+                stroke={strokeColor} strokeWidth={isSignal ? 2.5 : isFreshMark ? 2 : isSelected ? 1.5 : 1} />
               {/* Body — green (up) / red (down) fill, grade-colored outline */}
               <rect
                 x={cx - candleW / 2} y={bodyTop}
                 width={candleW} height={bodyH}
                 fill={color}
                 stroke={strokeColor}
-                strokeWidth={isFreshMark ? 2 : isSelected ? 1.5 : 1}
+                strokeWidth={isSignal ? 2.5 : isFreshMark ? 2 : isSelected ? 1.5 : 1}
                 opacity={bullish ? 0.9 : 0.75}
               />
               {/* Volume */}
               <rect x={cx - candleW / 2} y={volY} width={candleW} height={volBarH} fill={volFill} />
             </g>
 
-            {/* Grade glyph annotation — full for fresh, faded for stale */}
+            {/* THE-signal marker — a labelled pointer above the candle so the
+                emphasized signal is unmistakable, even without a grade glyph. */}
+            {isSignal && (() => {
+              const markColor = visual ? visual.color : 'var(--neon-cyan)'
+              const boxW = 46
+              const cxClamped = Math.min(Math.max(cx, PAD_L + boxW / 2), chartW - PAD_R - boxW / 2)
+              const boxY = PAD_T - 1
+              return (
+                <g pointerEvents="none" aria-hidden="true">
+                  <rect x={cxClamped - boxW / 2} y={boxY} width={boxW} height={13}
+                    fill="rgba(10,12,24,0.92)" stroke={markColor} strokeWidth={1} rx={2} />
+                  <text x={cxClamped} y={boxY + 9.5} textAnchor="middle" fontSize={8}
+                    fill={markColor} fontWeight={700}
+                    style={{ fontFamily: 'var(--mono)', letterSpacing: '0.06em' }}>
+                    SIGNAL
+                  </text>
+                  {/* Small downward pointer from the label toward the candle. */}
+                  <path d={`M ${cx - 4} ${boxY + 13} L ${cx + 4} ${boxY + 13} L ${cx} ${boxY + 18} Z`}
+                    fill={markColor} />
+                </g>
+              )
+            })()}
+
+            {/* Grade glyph annotation — full for fresh candles and THE signal
+                candle, faded for stale historical context. */}
             {visual && (
               <text x={cx} y={highY - 6} textAnchor="middle"
-                fontSize={isFreshMark ? 12 : 8}
+                fontSize={isFreshMark || isSignal ? 12 : 8}
                 fill={visual.color}
-                opacity={isFreshMark ? 1 : 0.4}
-                style={isFreshMark ? { filter: `drop-shadow(0 0 4px rgba(${visual.rgb},0.9))`, pointerEvents: 'none' } : { pointerEvents: 'none' }}>
+                opacity={isFreshMark || isSignal ? 1 : 0.4}
+                style={isFreshMark || isSignal ? { filter: `drop-shadow(0 0 4px rgba(${visual.rgb},0.9))`, pointerEvents: 'none' } : { pointerEvents: 'none' }}>
                 {visual.glyph}
               </text>
             )}

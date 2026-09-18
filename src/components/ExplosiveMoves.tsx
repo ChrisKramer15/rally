@@ -1,8 +1,10 @@
 import { useCallback, useMemo, useState } from 'react'
 import {
   useExplosiveMoves,
+  candleForDate,
   gradeVisual,
   type ExplosiveMove,
+  type ExplosiveCandle,
   type ExplosiveGrade,
 } from '../hooks/useExplosiveMoves'
 import { useBasingZones, selectSignalZone, zoneUsedUpAtPrice, type BasingZone } from '../hooks/useBasingZones'
@@ -89,10 +91,10 @@ function GradeBadge({ grade }: { grade: ExplosiveGrade }) {
  * color from the shared palette) so direction is never masked by the grade
  * color (mirrors the candle-chart treatment in the detail modal).
  */
-function MoveBar({ move }: { move: ExplosiveMove }) {
-  const pct      = move.latest.changePct
+function MoveBar({ candle }: { candle: ExplosiveCandle }) {
+  const pct      = candle.changePct
   const positive = pct >= 0
-  const v        = gradeVisual(move.latest.grade)
+  const v        = gradeVisual(candle.grade)
   const barH     = 28
   const barW     = 14
 
@@ -142,20 +144,34 @@ function MoveBar({ move }: { move: ExplosiveMove }) {
   )
 }
 
-function MoveRow({
+export function MoveRow({
   move,
+  signalCandle,
   currentPrice,
   rr,
   onSelect,
 }: {
   move: ExplosiveMove
+  /**
+   * The candle that anchors the symbol's selected (actionable) zone —
+   * `zone.explosiveDate`. This is the canonical signal candle the row renders
+   * (date + signal-origin stats). Falls back to `move.latest` when the zone's
+   * candle can't be resolved, preserving the pre-fix behavior defensively.
+   */
+  signalCandle: ExplosiveCandle | null
   /** Latest daily close for the symbol (the current price shown as the headline). */
   currentPrice: number | null
   /** Reward:risk if traded at the zone's proximal line (null if not measurable). */
   rr: number | null
   onSelect: (symbol: string) => void
 }) {
-  const { latest } = move
+  // Canonical signal candle = the one anchoring the selected zone. When it
+  // resolves, the row's date and every signal-origin stat follow the zone, so
+  // the row agrees with actionability, the traded key, and the placed trade.
+  // When `latest.date === zone.explosiveDate` this is byte-for-byte identical
+  // to the old `move.latest` rendering; the null fallback keeps the row working
+  // even if the candle can't be resolved.
+  const latest      = signalCandle ?? move.latest
   const positive    = latest.changePct >= 0
   const gapPositive = latest.gapPct >= 0
 
@@ -183,7 +199,7 @@ function MoveRow({
 
       {/* Mini move bar */}
       <div className="em-col-bar">
-        <MoveBar move={move} />
+        <MoveBar candle={latest} />
       </div>
 
       {/* Price — current (latest daily close) as the headline, with the
@@ -426,6 +442,30 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
     return out
   }, [actionable, zoneBySymbol])
 
+  // Canonical signal candle per actionable symbol: the explosive candle that
+  // anchors the SELECTED zone (`zone.explosiveDate`), resolved from the same
+  // cached daily bars the scan used via `candleForDate`. This is the single
+  // source of truth for the row's displayed date and signal-origin stats, so
+  // the row agrees with actionability, the traded key, and the placed trade
+  // (all of which key off `zone.explosiveDate`). When the most-recent
+  // qualifying candle already IS the zone's anchor, this equals `move.latest`
+  // and the row renders exactly as before. A null value (date not resolvable)
+  // makes MoveRow fall back to `move.latest` defensively.
+  const signalCandleBySymbol = useMemo(() => {
+    const out = new Map<string, ExplosiveCandle | null>()
+    const cached = loadCached(actionable.map((m) => m.symbol))
+    for (const m of actionable) {
+      const zone = zoneBySymbol.get(m.symbol)
+      const bars = cached[m.symbol]?.bars
+      if (!zone || !bars) {
+        out.set(m.symbol, null)
+        continue
+      }
+      out.set(m.symbol, candleForDate(m, bars, zone.explosiveDate, moveMultiple, freshnessDays))
+    }
+    return out
+  }, [actionable, zoneBySymbol, moveMultiple, freshnessDays])
+
   // Apply the user's persisted display filters, including zone quality and the
   // reward:risk floor (resolved from the zone + rrBySymbol above).
   const moves = actionable.filter((m) => {
@@ -456,6 +496,15 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
     : undefined
   const explosiveGrades: Map<string, ExplosiveGrade> | undefined = selectedMove?.allGrades
   const freshDates: Set<string> | undefined = selectedMove?.freshDates
+  // The canonical signal date for the open modal — the explosive candle
+  // anchoring the selected symbol's chosen (actionable) zone. Threading this in
+  // lets the modal emphasize THAT one candle as the signal, consistent with the
+  // row date, the traded key, and the placed trade (all keyed on
+  // `zone.explosiveDate`). Undefined for the plain watchlist modal, leaving its
+  // rendering unchanged.
+  const signalDate: string | undefined = selectedSymbol
+    ? zoneBySymbol.get(selectedSymbol)?.explosiveDate
+    : undefined
 
   const isLoading = status === 'loading'
 
@@ -792,6 +841,7 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
               <MoveRow
                 key={m.symbol}
                 move={m}
+                signalCandle={signalCandleBySymbol.get(m.symbol) ?? null}
                 currentPrice={priceBySymbol.get(m.symbol) ?? null}
                 rr={rrBySymbol.get(m.symbol) ?? null}
                 onSelect={setSelectedSymbol}
@@ -825,6 +875,7 @@ export function ExplosiveMoves({ stocks, status, portfolio, onTrade }: Explosive
           onClose={() => setSelectedSymbol(null)}
           explosiveGrades={explosiveGrades}
           freshDates={freshDates}
+          signalDate={signalDate}
           showTrade
           onTrade={onTrade}
         />

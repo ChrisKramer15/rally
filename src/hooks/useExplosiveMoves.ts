@@ -288,6 +288,80 @@ export function gradeExplosiveAt(bars: DailyBar[], date: string): ExplosiveGrade
   return gradeCandle(atrMultiple, bodyRatio, relVolume, DEFAULT_MOVE_MULTIPLE).grade
 }
 
+/**
+ * Resolve the `ExplosiveCandle` for a specific date, computed IDENTICALLY to
+ * how the scan loop (and `gradeExplosiveAt`) would have produced it for that
+ * candle. This lets a caller present the candle that anchors a chosen zone
+ * (`zone.explosiveDate`) without re-running the whole per-symbol scan, while
+ * guaranteeing the stats byte-for-byte match the scan's output.
+ *
+ * The per-date grade is taken from `move.allGrades` when available (the exact
+ * grade the scan recorded); otherwise it falls back to the same `gradeCandle`
+ * math the scan uses. `freshnessDays` controls the `isFresh` flag exactly as in
+ * the hook (calendar-day window from today's effective trading day).
+ *
+ * Returns null when the date isn't in `bars`, there's not enough history behind
+ * it to compute ATR, or the bar is flat (halted) — i.e. it can't be graded,
+ * mirroring the scan's `continue` conditions.
+ */
+export function candleForDate(
+  move: ExplosiveMove,
+  bars: DailyBar[],
+  date: string,
+  moveFloor: number = DEFAULT_MOVE_MULTIPLE,
+  freshnessDays: number = DEFAULT_FRESHNESS_DAYS,
+): ExplosiveCandle | null {
+  const i = bars.findIndex((b) => b.date === date)
+  // The scan starts once there's enough history behind the bar to compute ATR
+  // (i > ATR_PERIOD). Reject anything before that, matching the scan gate.
+  if (i <= ATR_PERIOD) return null
+
+  const bar = bars[i]
+  const prev = bars[i - 1]
+
+  const totalRange = bar.high - bar.low
+  if (totalRange === 0) return null // flat bar — scan skips these
+
+  const atr = atrBefore(bars, i)
+  if (!atr || atr <= 0) return null
+
+  const atrMultiple = Math.abs(bar.close - prev.close) / atr
+  const bodyRatio = Math.abs(bar.close - bar.open) / totalRange
+
+  const avgVol = avgVolumeBefore(bars, i)
+  const relVolume = avgVol > 0 ? bar.volume / avgVol : 1
+
+  const computed = gradeCandle(atrMultiple, bodyRatio, relVolume, moveFloor)
+  // Prefer the grade the scan already recorded for this date so a resolved
+  // candle matches the map exactly; fall back to the freshly computed grade.
+  const grade = move.allGrades.get(date) ?? computed.grade
+
+  const changePct = ((bar.close - prev.close) / prev.close) * 100
+  const gapPct = ((bar.open - prev.close) / prev.close) * 100
+  const rangePct = (totalRange / prev.close) * 100
+
+  const lastIdx = bars.length - 1
+  const ageBars = lastIdx - i
+  const ageDays = calendarDaysBetween(bar.date, effectiveTradingDay())
+  const isFresh = ageDays <= freshnessDays
+
+  return {
+    date: bar.date,
+    changePct,
+    atrMultiple,
+    relVolume,
+    gapPct,
+    rangePct,
+    bodyRatio,
+    grade,
+    score: computed.score,
+    close: bar.close,
+    prevClose: prev.close,
+    ageBars,
+    isFresh,
+  }
+}
+
 export function useExplosiveMoves(
   stocks: Stock[],
   moveMultiple: number = DEFAULT_MOVE_MULTIPLE,
