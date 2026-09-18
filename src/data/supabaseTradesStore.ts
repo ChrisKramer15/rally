@@ -546,6 +546,31 @@ export async function deleteTrades(ids: string[]): Promise<void> {
   }
 }
 
+/**
+ * Remove a single banked closed trade by id. Same NO_ROWS_DELETED guard as
+ * deleteTrade: `.select()` returns the rows actually removed, so a delete that
+ * matched nothing (already gone, or filtered by RLS) is surfaced as a write
+ * error instead of being silently treated as success.
+ */
+export async function deleteClosedTrade(id: string): Promise<void> {
+  const supabase = getSupabase()
+  if (!supabase) {
+    reportUnconfigured(`deleteClosedTrade ${id}`)
+    return
+  }
+  const { data, error } = await supabase.from('closed_trades').delete().eq('id', id).select('id')
+  if (error) {
+    logWriteError(`deleteClosedTrade ${id}`, error)
+    return
+  }
+  if (!data || data.length === 0) {
+    logWriteError(`deleteClosedTrade ${id}`, {
+      message: `Delete removed no rows for id ${id} — the row may be protected by RLS or already gone.`,
+      code: 'NO_ROWS_DELETED',
+    })
+  }
+}
+
 /** Bank a closed trade into `closed_trades`. */
 export async function insertClosedTrade(trade: ClosedTrade): Promise<void> {
   const supabase = getSupabase()

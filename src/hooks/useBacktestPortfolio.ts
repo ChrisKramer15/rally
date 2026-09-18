@@ -4,6 +4,7 @@ import type { AnyExplosiveGrade } from './useExplosiveMoves'
 import { todayEasternISO } from '../data/marketCalendar'
 import {
   deleteTrade as deleteTradeRemote,
+  deleteClosedTrade as deleteClosedTradeRemote,
   fetchPortfolio,
   insertClosedTrade as insertClosedTradeRemote,
   insertTrade as insertTradeRemote,
@@ -462,20 +463,33 @@ export function useBacktestPortfolio() {
   // exists to deliver.
   const pendingDeletesRef = useRef<Set<string>>(new Set())
 
-  // Drop tombstoned (locally-deleted, not-yet-confirmed) positions from a remote
-  // snapshot, and clear any tombstone the remote no longer contains (delete
-  // confirmed). Returns the filtered positions to adopt.
-  const reconcilePendingDeletes = useCallback((remotePositions: BacktestPosition[]): BacktestPosition[] => {
-    const tombstones = pendingDeletesRef.current
-    if (tombstones.size === 0) return remotePositions
-    const remoteIds = new Set(remotePositions.map((p) => p.id))
-    for (const id of tombstones) {
-      if (!remoteIds.has(id)) tombstones.delete(id) // delete has landed; stop suppressing
-    }
-    return tombstones.size === 0
-      ? remotePositions
-      : remotePositions.filter((p) => !tombstones.has(p.id))
-  }, [])
+  // Reconcile tombstones against a full remote snapshot. A tombstoned id is a
+  // row (open position OR banked closed trade) the user just deleted whose
+  // DELETE may not have committed yet — filter it out of both lists so a read
+  // that raced ahead of the commit can't resurrect it. Clearing is done ONCE
+  // here against the UNION of position + closed ids: an id is only released when
+  // the remote no longer contains it in EITHER list (proof the delete landed).
+  // Doing it per-list would prematurely clear a closed-trade tombstone (a closed
+  // id never appears among positions) and let the row reappear.
+  const reconcileTombstones = useCallback(
+    (remotePositions: BacktestPosition[], remoteClosed: ClosedTrade[]) => {
+      const tombstones = pendingDeletesRef.current
+      if (tombstones.size === 0) return { positions: remotePositions, closed: remoteClosed }
+      const remoteIds = new Set<string>([
+        ...remotePositions.map((p) => p.id),
+        ...remoteClosed.map((t) => t.id),
+      ])
+      for (const id of tombstones) {
+        if (!remoteIds.has(id)) tombstones.delete(id) // delete has landed; stop suppressing
+      }
+      if (tombstones.size === 0) return { positions: remotePositions, closed: remoteClosed }
+      return {
+        positions: remotePositions.filter((p) => !tombstones.has(p.id)),
+        closed: remoteClosed.filter((t) => !tombstones.has(t.id)),
+      }
+    },
+    [],
+  )
 
   // The most recent durable-write failure, surfaced so the UI can warn the user
   // that a trade did NOT persist (instead of the old silent console.warn). Null
@@ -524,10 +538,11 @@ export function useBacktestPortfolio() {
         // Successful read — adopt it as the source of truth, even when it's
         // genuinely empty (a real reset should clear the local cache too).
         setState((prev) => {
+          const reconciled = reconcileTombstones(remote.positions, remote.closed)
           const next: PersistShape = {
             budget: remote.budget ?? prev.budget,
-            positions: reconcilePendingDeletes(remote.positions),
-            closed: remote.closed,
+            positions: reconciled.positions,
+            closed: reconciled.closed,
           }
           persist(next)
           return next
@@ -539,7 +554,7 @@ export function useBacktestPortfolio() {
     return () => {
       cancelled = true
     }
-  }, [reconcilePendingDeletes])
+  }, [reconcileTombstones])
 
   // Realtime: the server-side settle-positions Edge Function fills/settles
   // positions on a cron. When it writes to `trades` / `closed_trades`, re-read
@@ -555,15 +570,16 @@ export function useBacktestPortfolio() {
         const remote = await fetchPortfolio()
         if (!remote.ok) return
         setState((prev) => {
+          // Filter out rows the user just deleted whose DELETE may not have
+          // committed yet. Our own DELETE fires a postgres_changes event that
+          // re-runs this read; without this guard a read racing ahead of the
+          // commit re-adopts the just-removed row and it reappears on the next
+          // paint / refresh. The tombstone self-clears once the delete lands.
+          const reconciled = reconcileTombstones(remote.positions, remote.closed)
           const next: PersistShape = {
             budget: remote.budget ?? prev.budget,
-            // Filter out rows the user just deleted whose DELETE may not have
-            // committed yet. Our own DELETE fires a postgres_changes event that
-            // re-runs this read; without this guard a read racing ahead of the
-            // commit re-adopts the just-removed row and it reappears on the next
-            // paint / refresh. The tombstone self-clears once the delete lands.
-            positions: reconcilePendingDeletes(remote.positions),
-            closed: remote.closed,
+            positions: reconciled.positions,
+            closed: reconciled.closed,
           }
           persist(next)
           return next
@@ -571,7 +587,7 @@ export function useBacktestPortfolio() {
       })()
     })
     return unsubscribe
-  }, [reconcilePendingDeletes])
+  }, [reconcileTombstones])
 
   const setBudget = useCallback((next: number) => {
     if (!(Number.isFinite(next) && next >= 0)) return
@@ -817,6 +833,25 @@ export function useBacktestPortfolio() {
     }
   }, [])
 
+  /**
+   * Remove a single banked closed trade from history. This is a bookkeeping
+   * delete — it does NOT reverse the realized P/L that compounded into the
+   * budget when the trade closed. The budget reflects the cash outcome that
+   * actually happened; deleting the record just hides it from the history list.
+   * (Reversing the P/L would rewrite the account balance to a value that never
+   * occurred, which is more surprising than leaving it.)
+   */
+  const removeClosedTrade = useCallback((id: string) => {
+    const s = stateRef.current
+    if (!s.closed.some((t) => t.id === id)) return // already gone
+    editedRef.current = true
+    setState((prev) => ({ ...prev, closed: prev.closed.filter((t) => t.id !== id) }))
+    // Tombstone so a realtime re-read racing our own DELETE commit can't
+    // resurrect the row — same guard closePosition uses for cancelled orders.
+    pendingDeletesRef.current.add(id)
+    void deleteClosedTradeRemote(id)
+  }, [])
+
   const resetPortfolio = useCallback(() => {
     editedRef.current = true
     setState({ budget: DEFAULT_BUDGET, positions: [], closed: [] })
@@ -830,6 +865,7 @@ export function useBacktestPortfolio() {
     setBudget,
     openTrade,
     closePosition,
+    removeClosedTrade,
     resetPortfolio,
     /** Max concurrent positions (open + pending). */
     maxPositions: MAX_POSITIONS,

@@ -317,7 +317,7 @@ function PendingOrderRow({
 }
 
 /** A single banked closed-trade row (reused flat and inside grouped sections). */
-function ClosedTradeRow({ trade }: { trade: ClosedTrade }) {
+function ClosedTradeRow({ trade, onRemove }: { trade: ClosedTrade; onRemove: (id: string) => void }) {
   const [expanded, setExpanded] = useState(false)
   const detail = closedToDetail(trade)
   // An invalidated trade never opened — a pending limit that would have filled on
@@ -385,6 +385,22 @@ function ClosedTradeRow({ trade }: { trade: ClosedTrade }) {
             title="Show trade details"
           >
             {expanded ? 'Hide' : 'Details'}
+          </button>
+          <button
+            className="bt-remove-btn"
+            onClick={() => {
+              if (
+                window.confirm(
+                  `Remove this closed ${trade.symbol} trade from your history? This only deletes the record — it won't change your budget. This can't be undone.`,
+                )
+              ) {
+                onRemove(trade.id)
+              }
+            }}
+            title="Remove this trade from history"
+            aria-label={`Remove ${trade.symbol} trade from history`}
+          >
+            ×
           </button>
         </div>
       </div>
@@ -455,7 +471,8 @@ function groupClosed(trades: ClosedTrade[], by: ClosedGroupBy): ClosedGroup[] {
 type TradeView = 'pending' | 'active' | 'closed'
 
 export function Backtest({ stocks, portfolio }: BacktestProps) {
-  const { budget, positions, closed, setBudget, closePosition, resetPortfolio } = portfolio
+  const { budget, positions, closed, setBudget, closePosition, removeClosedTrade, resetPortfolio } =
+    portfolio
   const [budgetDraft, setBudgetDraft] = useState<string>(String(budget))
   // Id of the position whose chart/level detail modal is open (null = closed).
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -736,7 +753,7 @@ export function Backtest({ stocks, portfolio }: BacktestProps) {
               {closedGroupBy === 'none' ? (
                 <ul className="bt-list" aria-label="Closed trades">
                   {closed.map((t) => (
-                    <ClosedTradeRow key={t.id} trade={t} />
+                    <ClosedTradeRow key={t.id} trade={t} onRemove={removeClosedTrade} />
                   ))}
                 </ul>
               ) : (
@@ -758,7 +775,7 @@ export function Backtest({ stocks, portfolio }: BacktestProps) {
                       </div>
                       <ul className="bt-list" aria-label={`Closed trades — ${g.label}`}>
                         {g.trades.map((t) => (
-                          <ClosedTradeRow key={t.id} trade={t} />
+                          <ClosedTradeRow key={t.id} trade={t} onRemove={removeClosedTrade} />
                         ))}
                       </ul>
                     </div>
